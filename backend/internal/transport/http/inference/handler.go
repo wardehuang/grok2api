@@ -708,19 +708,35 @@ func (h *Handler) getVideo(c *gin.Context) {
 		writeGatewayError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, videoGenerationResponse(job, h.videoContentURL(job.ID)))
+	c.JSON(http.StatusOK, videoGenerationResponse(job, h.videoResultURL(job)))
+}
+
+func (h *Handler) resolvedPublicAPIBaseURL() string {
+	baseURL := h.publicAPIBaseURL
+	if h.publicBaseURL != nil {
+		baseURL = h.publicBaseURL()
+	}
+	return strings.TrimRight(strings.TrimSpace(baseURL), "/")
+}
+
+// videoResultURL 优先返回免鉴权本地媒体地址；无本地资产时回退到需 API key 的 content 路径。
+func (h *Handler) videoResultURL(job mediadomain.Job) string {
+	if assetID := strings.TrimSpace(job.ResultAssetID); assetID != "" {
+		path := "/v1/media/videos/" + url.PathEscape(assetID)
+		if baseURL := h.resolvedPublicAPIBaseURL(); baseURL != "" {
+			return baseURL + path
+		}
+		return path
+	}
+	return h.videoContentURL(job.ID)
 }
 
 func (h *Handler) videoContentURL(jobID string) string {
 	path := "/v1/videos/" + url.PathEscape(jobID) + "/content"
-	baseURL := h.publicAPIBaseURL
-	if h.publicBaseURL != nil {
-		baseURL = strings.TrimRight(strings.TrimSpace(h.publicBaseURL()), "/")
+	if baseURL := h.resolvedPublicAPIBaseURL(); baseURL != "" {
+		return baseURL + path
 	}
-	if baseURL == "" {
-		return path
-	}
-	return baseURL + path
+	return path
 }
 
 func (h *Handler) getVideoContent(c *gin.Context) {

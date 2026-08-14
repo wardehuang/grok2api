@@ -23,6 +23,7 @@ import (
 	adminauthhttp "github.com/chenyme/grok2api/backend/internal/transport/http/adminauth"
 	audithttp "github.com/chenyme/grok2api/backend/internal/transport/http/audit"
 	clientkeyhttp "github.com/chenyme/grok2api/backend/internal/transport/http/clientkey"
+	cpaautopproxyhttp "github.com/chenyme/grok2api/backend/internal/transport/http/cpaautopproxy"
 	dashboardhttp "github.com/chenyme/grok2api/backend/internal/transport/http/dashboard"
 	egresshttp "github.com/chenyme/grok2api/backend/internal/transport/http/egress"
 	"github.com/chenyme/grok2api/backend/internal/transport/http/inference"
@@ -155,6 +156,8 @@ func New(deps Dependencies) *gin.Engine {
 	settingshttp.NewHandler(deps.Settings).Register(adminProtected)
 	egressHandler := egresshttp.NewHandler(deps.Egress, deps.QualityGuardStatePath, deps.QualityGuardConfigPath).WithQualityGuardProbe(deps.QualityGuardProbe)
 	egressHandler.Register(adminProtected)
+	// Local CPA auto-proxy slot sync; keep registration isolated for upstream merges.
+	cpaautopproxyhttp.NewHandler(deps.Egress, deps.Accounts, deps.Logger).Register(adminProtected)
 	systemhttp.NewHandler(func() string {
 		if deps.Settings != nil {
 			return deps.Settings.PublicAPIBaseURL()

@@ -134,6 +134,28 @@ func TestVideoContentURLUsesConfiguredPublicAPIBase(t *testing.T) {
 	}
 }
 
+func TestVideoResultURLPrefersUnauthenticatedMediaAsset(t *testing.T) {
+	handler := NewHandler(nil, nil, 1<<20, "https://api.example.com/grok2api/")
+	job := mediadomain.Job{
+		ID: "video_request_1", Status: mediadomain.StatusCompleted,
+		ResultAssetID: "vid_asset_0001", UpstreamURL: "https://assets.grok.com/source.mp4",
+	}
+	response := videoGenerationResponse(job, handler.videoResultURL(job))
+	video, ok := response["video"].(gin.H)
+	if !ok || video["url"] != "https://api.example.com/grok2api/v1/media/videos/vid_asset_0001" {
+		t.Fatalf("response = %#v", response)
+	}
+	jobWithoutAsset := mediadomain.Job{
+		ID: "video_request_2", Status: mediadomain.StatusCompleted,
+		UpstreamURL: "https://assets.grok.com/source.mp4",
+	}
+	fallback := videoGenerationResponse(jobWithoutAsset, handler.videoResultURL(jobWithoutAsset))
+	fallbackVideo, ok := fallback["video"].(gin.H)
+	if !ok || fallbackVideo["url"] != "https://api.example.com/grok2api/v1/videos/video_request_2/content" {
+		t.Fatalf("fallback response = %#v", fallback)
+	}
+}
+
 func TestVideoContentURLFollowsRuntimePublicAPIBase(t *testing.T) {
 	baseURL := "https://old.example.com"
 	handler := NewHandler(nil, nil, 1<<20, "https://static.example.com").SetPublicAPIBaseURLResolver(func() string {
@@ -145,6 +167,10 @@ func TestVideoContentURLFollowsRuntimePublicAPIBase(t *testing.T) {
 	baseURL = "https://new.example.com/api/"
 	if got := handler.videoContentURL("video_request_2"); got != "https://new.example.com/api/v1/videos/video_request_2/content" {
 		t.Fatalf("updated URL = %q", got)
+	}
+	job := mediadomain.Job{ID: "video_request_3", ResultAssetID: "vid_hot_1"}
+	if got := handler.videoResultURL(job); got != "https://new.example.com/api/v1/media/videos/vid_hot_1" {
+		t.Fatalf("media URL = %q", got)
 	}
 }
 

@@ -7,7 +7,8 @@ RUN addgroup -S -g 10001 quality-guard && \
     chmod 0700 /var/lib/grok2api-quality-guard
 
 COPY tools/egress-quality-guard/quality_guard.py /usr/local/bin/grok2api-egress-quality-guard
-RUN chmod 0755 /usr/local/bin/grok2api-egress-quality-guard
+RUN sed -i 's/\r$//' /usr/local/bin/grok2api-egress-quality-guard && \
+    chmod 0755 /usr/local/bin/grok2api-egress-quality-guard
 
 USER quality-guard
 VOLUME ["/var/lib/grok2api-quality-guard"]

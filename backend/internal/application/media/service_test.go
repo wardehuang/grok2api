@@ -679,3 +679,16 @@ func TestPublicImageURLUsesHotReloadedBase(t *testing.T) {
 		t.Fatalf("hot-reloaded URL = %q", got)
 	}
 }
+
+func TestPublicVideoURLUsesHotReloadedBase(t *testing.T) {
+	service := NewService(nil, nil, nil, nil, Config{PublicBaseURL: "https://config.example/base/"})
+	if got := service.PublicVideoURL("vid_demo"); got != "https://config.example/base/v1/media/videos/vid_demo" {
+		t.Fatalf("configured URL = %q", got)
+	}
+	updated := service.runtimeConfig()
+	updated.PublicBaseURL = "https://runtime.example/api/"
+	service.UpdateConfig(updated)
+	if got := service.PublicVideoURL("vid_demo"); got != "https://runtime.example/api/v1/media/videos/vid_demo" {
+		t.Fatalf("hot-reloaded URL = %q", got)
+	}
+}
