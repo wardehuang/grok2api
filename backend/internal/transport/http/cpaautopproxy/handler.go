@@ -481,9 +481,50 @@ func emailIndexFromAccounts(accounts []consoleAccountRef) map[string][]uint64 {
 		if account.Email == "" {
 			continue
 		}
-		index[account.Email] = append(index[account.Email], account.ID)
+		// Index both the literal lowercased email and the Gmail-canonical key so
+		// lucymunen80@gmail.com matches a stored lucymunen8.0@gmail.com.
+		matchKeys := emailMatchKeys(account.Email)
+		for _, matchKey := range matchKeys {
+			index[matchKey] = append(index[matchKey], account.ID)
+		}
 	}
 	return index
+}
+
+// emailMatchKeys returns lookup keys for an address. Gmail/Googlemail local-parts
+// ignore dots and +tags, so those variants collapse to one canonical key.
+func emailMatchKeys(rawEmail string) []string {
+	normalizedEmail := strings.ToLower(strings.TrimSpace(rawEmail))
+	if normalizedEmail == "" {
+		return nil
+	}
+	keys := []string{normalizedEmail}
+	if canonicalKey := gmailCanonicalEmail(normalizedEmail); canonicalKey != "" && canonicalKey != normalizedEmail {
+		keys = append(keys, canonicalKey)
+	}
+	return keys
+}
+
+func gmailCanonicalEmail(normalizedEmail string) string {
+	atIndex := strings.LastIndex(normalizedEmail, "@")
+	if atIndex <= 0 || atIndex == len(normalizedEmail)-1 {
+		return ""
+	}
+	localPart := normalizedEmail[:atIndex]
+	domain := normalizedEmail[atIndex+1:]
+	switch domain {
+	case "gmail.com", "googlemail.com":
+	default:
+		return ""
+	}
+	if plusIndex := strings.IndexByte(localPart, '+'); plusIndex >= 0 {
+		localPart = localPart[:plusIndex]
+	}
+	localPart = strings.ReplaceAll(localPart, ".", "")
+	if localPart == "" {
+		return ""
+	}
+	return localPart + "@gmail.com"
 }
 
 type consoleAccountRef struct {
@@ -596,8 +637,7 @@ func resolveConsoleAccountIDs(accountEmails []string, consoleEmailIndex map[stri
 	seenAccountIDs := make(map[uint64]struct{})
 	skippedAccounts = make([]string, 0)
 	for _, rawEmail := range accountEmails {
-		normalizedEmail := strings.ToLower(strings.TrimSpace(rawEmail))
-		matchedIDs := consoleEmailIndex[normalizedEmail]
+		matchedIDs := lookupConsoleAccountIDs(rawEmail, consoleEmailIndex)
 		if len(matchedIDs) == 0 {
 			skippedAccounts = append(skippedAccounts, strings.TrimSpace(rawEmail))
 			continue
@@ -611,6 +651,21 @@ func resolveConsoleAccountIDs(accountEmails []string, consoleEmailIndex map[stri
 		}
 	}
 	return accountIDs, skippedAccounts
+}
+
+func lookupConsoleAccountIDs(rawEmail string, consoleEmailIndex map[string][]uint64) []uint64 {
+	seenAccountIDs := make(map[uint64]struct{})
+	matchedIDs := make([]uint64, 0)
+	for _, matchKey := range emailMatchKeys(rawEmail) {
+		for _, accountID := range consoleEmailIndex[matchKey] {
+			if _, exists := seenAccountIDs[accountID]; exists {
+				continue
+			}
+			seenAccountIDs[accountID] = struct{}{}
+			matchedIDs = append(matchedIDs, accountID)
+		}
+	}
+	return matchedIDs
 }
 
 func skippedEmails(accountEmails []string, consoleEmailIndex map[string][]uint64) []string {

@@ -50,3 +50,12 @@ __pycache__/
 /.tmp/
 /tmp/
 /Dockerfile.local
+
+# Local secrets, credentials, deploy scratch (never commit)
+/.deploy-tmp/
+/sso.txt
+/xai-auth-emails.txt
+/backup.txt
+/console_sync_failed_emails.txt
+/*-emails.txt
+/.bootstrap-admin-password
