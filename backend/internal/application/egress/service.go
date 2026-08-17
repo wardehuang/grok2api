@@ -183,6 +183,7 @@ func (s *Service) ProbeQuality(ctx context.Context, nodeID uint64, input Quality
 // AccountBindingRepository is intentionally narrow so existing account
 // repository consumers do not gain egress concerns.
 type AccountBindingRepository interface {
+	Get(context.Context, uint64) (accountdomain.Credential, error)
 	CountProviderAccountsByIDs(context.Context, accountdomain.Provider, []uint64) (int64, error)
 	UpdateEgressBindings(context.Context, accountdomain.Provider, []uint64, *uint64, accountdomain.EgressAssignmentMode, time.Time) (int64, error)
 	ListEgressAssignments(context.Context, accountdomain.Provider) ([]accountdomain.Credential, error)

@@ -25,8 +25,11 @@ import (
 
 const (
 	nodeNamePrefix = "cpa_auto_proxy_"
+	// webNodeNameInfix sits between the shared prefix and the slot number so both
+	// Console and Web nodes stay discoverable under the same CPA naming family.
+	webNodeNameInfix = "web_"
 	// accountLookupPageSize uses the repository max page size so one bulk request
-	// can index Console emails with as few List round-trips as possible.
+	// can index provider emails with as few List round-trips as possible.
 	accountLookupPageSize = repository.MaxPageSize
 )
 
@@ -57,15 +60,31 @@ type slotRequest struct {
 }
 
 type slotResult struct {
-	Slot              int      `json:"slot"`
-	Action            string   `json:"action"`
-	NodeName          string   `json:"nodeName"`
-	NodeID            string   `json:"nodeId,omitempty"`
-	Assigned          int      `json:"assigned"`
-	OverflowAssigned  int      `json:"overflowAssigned"`
-	OverflowAccounts  []string `json:"overflowAccounts"`
-	SkippedAccounts   []string `json:"skippedAccounts"`
-	Error             string   `json:"error,omitempty"`
+	Slot                 int      `json:"slot"`
+	Action               string   `json:"action"`
+	NodeName             string   `json:"nodeName"`
+	NodeID               string   `json:"nodeId,omitempty"`
+	WebNodeName          string   `json:"webNodeName"`
+	WebNodeID            string   `json:"webNodeId,omitempty"`
+	Assigned             int      `json:"assigned"`
+	ConsoleAssigned      int      `json:"consoleAssigned"`
+	WebAssigned          int      `json:"webAssigned"`
+	OverflowAssigned     int      `json:"overflowAssigned"`
+	ConsoleOverflowAssigned int  `json:"consoleOverflowAssigned"`
+	WebOverflowAssigned  int      `json:"webOverflowAssigned"`
+	OverflowAccounts     []string `json:"overflowAccounts"`
+	ConsoleOverflowAccounts []string `json:"consoleOverflowAccounts"`
+	WebOverflowAccounts  []string `json:"webOverflowAccounts"`
+	SkippedAccounts      []string `json:"skippedAccounts"`
+	Error                string   `json:"error,omitempty"`
+}
+
+func consoleNodeName(slot int) string {
+	return nodeNamePrefix + strconv.Itoa(slot)
+}
+
+func webNodeName(slot int) string {
+	return nodeNamePrefix + webNodeNameInfix + strconv.Itoa(slot)
 }
 
 func (handler *Handler) syncSlots(ginContext *gin.Context) {
@@ -95,13 +114,20 @@ func (handler *Handler) syncSlots(ginContext *gin.Context) {
 	}
 
 	requestContext := ginContext.Request.Context()
-	consoleAccounts, err := handler.listConsoleAccounts(requestContext)
+	consoleAccounts, err := handler.listProviderAccounts(requestContext, accountdomain.ProviderConsole)
 	if err != nil {
-		log.Error("cpa_auto_proxy_account_lookup_failed", "error", err)
+		log.Error("cpa_auto_proxy_account_lookup_failed", "provider", string(accountdomain.ProviderConsole), "error", err)
 		response.Error(ginContext, http.StatusInternalServerError, "cpaAutoProxyAccountLookupFailed", "读取 Grok Console 账号失败")
 		return
 	}
+	webAccounts, err := handler.listProviderAccounts(requestContext, accountdomain.ProviderWeb)
+	if err != nil {
+		log.Error("cpa_auto_proxy_account_lookup_failed", "provider", string(accountdomain.ProviderWeb), "error", err)
+		response.Error(ginContext, http.StatusInternalServerError, "cpaAutoProxyAccountLookupFailed", "读取 Grok Web 账号失败")
+		return
+	}
 	consoleEmailIndex := emailIndexFromAccounts(consoleAccounts)
+	webEmailIndex := emailIndexFromAccounts(webAccounts)
 
 	nodeByName, err := handler.buildNodeNameIndex(requestContext)
 	if err != nil {
@@ -112,13 +138,60 @@ func (handler *Handler) syncSlots(ginContext *gin.Context) {
 
 	results := make([]slotResult, 0, len(requests))
 	for _, requestItem := range requests {
-		result := handler.applySlot(requestContext, requestItem, consoleEmailIndex, nodeByName)
+		result := handler.applySlot(requestContext, requestItem, consoleEmailIndex, webEmailIndex, nodeByName)
 		results = append(results, result)
 	}
 
-	overflowAssigned, overflowError := handler.assignOverflowAccounts(requestContext, requests, results, consoleAccounts, consoleEmailIndex)
-	if overflowError != nil {
-		log.Error("cpa_auto_proxy_overflow_assign_failed", "error", overflowError, "assigned", overflowAssigned)
+	consoleOverflowAssigned, consoleOverflowError := handler.assignOverflowAccounts(
+		requestContext,
+		requests,
+		results,
+		consoleAccounts,
+		consoleEmailIndex,
+		accountdomain.ProviderConsole,
+		func(result slotResult) string { return result.NodeID },
+		func(result *slotResult, labels []string) {
+			result.ConsoleOverflowAccounts = labels
+			result.ConsoleOverflowAssigned = len(labels)
+			result.OverflowAccounts = append(result.OverflowAccounts, labels...)
+			result.OverflowAssigned += len(labels)
+			result.ConsoleAssigned += len(labels)
+			result.Assigned += len(labels)
+		},
+	)
+	if consoleOverflowError != nil {
+		log.Error(
+			"cpa_auto_proxy_overflow_assign_failed",
+			"provider", string(accountdomain.ProviderConsole),
+			"error", consoleOverflowError,
+			"assigned", consoleOverflowAssigned,
+		)
+	}
+
+	webOverflowAssigned, webOverflowError := handler.assignOverflowAccounts(
+		requestContext,
+		requests,
+		results,
+		webAccounts,
+		webEmailIndex,
+		accountdomain.ProviderWeb,
+		func(result slotResult) string { return result.WebNodeID },
+		func(result *slotResult, labels []string) {
+			result.WebOverflowAccounts = labels
+			result.WebOverflowAssigned = len(labels)
+			result.OverflowAccounts = append(result.OverflowAccounts, labels...)
+			result.OverflowAssigned += len(labels)
+			result.WebAssigned += len(labels)
+			result.Assigned += len(labels)
+		},
+	)
+	if webOverflowError != nil {
+		log.Error(
+			"cpa_auto_proxy_overflow_assign_failed",
+			"provider", string(accountdomain.ProviderWeb),
+			"error", webOverflowError,
+			"assigned", webOverflowAssigned,
+		)
 	}
 
 	for index, requestItem := range requests {
@@ -135,6 +208,8 @@ func (handler *Handler) syncSlots(ginContext *gin.Context) {
 		"absent", summary.absent,
 		"failed", summary.failed,
 		"assigned_total", summary.assignedTotal,
+		"console_assigned_total", summary.consoleAssignedTotal,
+		"web_assigned_total", summary.webAssignedTotal,
 		"overflow_assigned_total", summary.overflowAssignedTotal,
 		"skipped_total", summary.skippedTotal,
 	)
@@ -146,7 +221,8 @@ func (handler *Handler) logSlotReceived(log *slog.Logger, requestItem slotReques
 	log.Info(
 		"cpa_auto_proxy_slot_received",
 		"slot", requestItem.Slot,
-		"node_name", nodeNamePrefix+strconv.Itoa(requestItem.Slot),
+		"node_name", consoleNodeName(requestItem.Slot),
+		"web_node_name", webNodeName(requestItem.Slot),
 		"proxy_empty", proxyDetail.Empty,
 		"proxy_endpoint", proxyDetail.Endpoint,
 		"proxy_auth", proxyDetail.HasAuth,
@@ -163,6 +239,7 @@ func (handler *Handler) logSlotResult(log *slog.Logger, requestItem slotRequest,
 		"slot", result.Slot,
 		"action", result.Action,
 		"node_name", result.NodeName,
+		"web_node_name", result.WebNodeName,
 		"proxy_empty", proxyDetail.Empty,
 		"proxy_endpoint", proxyDetail.Endpoint,
 		"proxy_auth", proxyDetail.HasAuth,
@@ -172,13 +249,22 @@ func (handler *Handler) logSlotResult(log *slog.Logger, requestItem slotRequest,
 		"matched_accounts", matchedAccounts,
 		"matched_count", len(matchedAccounts),
 		"assigned", result.Assigned,
+		"console_assigned", result.ConsoleAssigned,
+		"web_assigned", result.WebAssigned,
 		"overflow_assigned", result.OverflowAssigned,
+		"console_overflow_assigned", result.ConsoleOverflowAssigned,
+		"web_overflow_assigned", result.WebOverflowAssigned,
 		"overflow_accounts", cloneStringSlice(result.OverflowAccounts),
+		"console_overflow_accounts", cloneStringSlice(result.ConsoleOverflowAccounts),
+		"web_overflow_accounts", cloneStringSlice(result.WebOverflowAccounts),
 		"skipped_count", len(result.SkippedAccounts),
 		"skipped_accounts", cloneStringSlice(result.SkippedAccounts),
 	}
 	if result.NodeID != "" {
 		attrs = append(attrs, "node_id", result.NodeID)
+	}
+	if result.WebNodeID != "" {
+		attrs = append(attrs, "web_node_id", result.WebNodeID)
 	}
 	if result.Error != "" {
 		attrs = append(attrs, "error", result.Error)
@@ -195,6 +281,8 @@ type resultSummary struct {
 	absent                int
 	failed                int
 	assignedTotal         int
+	consoleAssignedTotal  int
+	webAssignedTotal      int
 	overflowAssignedTotal int
 	skippedTotal          int
 }
@@ -215,6 +303,8 @@ func summarizeResults(results []slotResult) resultSummary {
 			summary.failed++
 		}
 		summary.assignedTotal += result.Assigned
+		summary.consoleAssignedTotal += result.ConsoleAssigned
+		summary.webAssignedTotal += result.WebAssigned
 		summary.overflowAssignedTotal += result.OverflowAssigned
 		summary.skippedTotal += len(result.SkippedAccounts)
 	}
@@ -230,13 +320,13 @@ func slotNumbers(requests []slotRequest) []int {
 }
 
 type receivedSlotSummary struct {
-	Slot         int      `json:"slot"`
-	ProxyEmpty   bool     `json:"proxyEmpty"`
-	ProxyEndpoint string  `json:"proxyEndpoint,omitempty"`
-	ProxyAuth    bool     `json:"proxyAuth"`
-	ProxyScheme  string   `json:"proxyScheme,omitempty"`
-	AccountCount int      `json:"accountCount"`
-	Accounts     []string `json:"accounts"`
+	Slot          int      `json:"slot"`
+	ProxyEmpty    bool     `json:"proxyEmpty"`
+	ProxyEndpoint string   `json:"proxyEndpoint,omitempty"`
+	ProxyAuth     bool     `json:"proxyAuth"`
+	ProxyScheme   string   `json:"proxyScheme,omitempty"`
+	AccountCount  int      `json:"accountCount"`
+	Accounts      []string `json:"accounts"`
 }
 
 func receivedPayloadSummary(requests []slotRequest) []receivedSlotSummary {
@@ -320,8 +410,9 @@ func validateSlotRequests(requests []slotRequest) error {
 		if requestItem.Slot < 0 {
 			return fmt.Errorf("第 %d 项 slot 不能为负数", index)
 		}
-		nodeName := nodeNamePrefix + strconv.Itoa(requestItem.Slot)
-		if len(nodeName) > 160 {
+		consoleName := consoleNodeName(requestItem.Slot)
+		webName := webNodeName(requestItem.Slot)
+		if len(consoleName) > 160 || len(webName) > 160 {
 			return fmt.Errorf("第 %d 项 slot 过大，节点名超过 160 字符", index)
 		}
 		if _, exists := seenSlots[requestItem.Slot]; exists {
@@ -341,92 +432,194 @@ func (handler *Handler) applySlot(
 	requestContext context.Context,
 	requestItem slotRequest,
 	consoleEmailIndex map[string][]uint64,
+	webEmailIndex map[string][]uint64,
 	nodeByName map[string]egressdomain.PublicNode,
 ) slotResult {
-	nodeName := nodeNamePrefix + strconv.Itoa(requestItem.Slot)
+	consoleName := consoleNodeName(requestItem.Slot)
+	webName := webNodeName(requestItem.Slot)
 	result := slotResult{
-		Slot:             requestItem.Slot,
-		NodeName:         nodeName,
-		OverflowAccounts: []string{},
-		SkippedAccounts:  []string{},
+		Slot:                    requestItem.Slot,
+		NodeName:                consoleName,
+		WebNodeName:             webName,
+		OverflowAccounts:        []string{},
+		ConsoleOverflowAccounts: []string{},
+		WebOverflowAccounts:     []string{},
+		SkippedAccounts:         []string{},
 	}
 
 	proxyAddress := strings.TrimSpace(requestItem.IP)
 	if proxyAddress == "" {
-		existingNode, exists := nodeByName[nodeName]
-		if !exists {
-			result.Action = "absent"
-			result.SkippedAccounts = skippedEmails(requestItem.Accounts, consoleEmailIndex)
-			return result
-		}
-		if err := handler.egress.Delete(requestContext, existingNode.ID); err != nil {
-			if errors.Is(err, egressapp.ErrNotFound) {
-				delete(nodeByName, nodeName)
-				result.Action = "absent"
-				result.SkippedAccounts = skippedEmails(requestItem.Accounts, consoleEmailIndex)
-				return result
-			}
-			result.Action = "failed"
-			result.Error = err.Error()
-			return result
-		}
-		delete(nodeByName, nodeName)
-		result.Action = "deleted"
-		result.NodeID = strconv.FormatUint(existingNode.ID, 10)
-		result.SkippedAccounts = skippedEmails(requestItem.Accounts, consoleEmailIndex)
-		return result
+		return handler.deleteSlotNodes(requestContext, requestItem, result, consoleEmailIndex, webEmailIndex, nodeByName)
 	}
 
+	consoleNode, consoleAction, consoleError := handler.upsertScopedNode(
+		requestContext,
+		consoleName,
+		egressdomain.ScopeConsole,
+		proxyAddress,
+		nodeByName,
+	)
+	if consoleError != nil {
+		result.Action = "failed"
+		result.Error = consoleError.Error()
+		return result
+	}
+	result.NodeID = strconv.FormatUint(consoleNode.ID, 10)
+
+	webNode, webAction, webError := handler.upsertScopedNode(
+		requestContext,
+		webName,
+		egressdomain.ScopeWeb,
+		proxyAddress,
+		nodeByName,
+	)
+	if webError != nil {
+		result.Action = "failed"
+		result.Error = webError.Error()
+		return result
+	}
+	result.WebNodeID = strconv.FormatUint(webNode.ID, 10)
+	result.Action = mergeUpsertActions(consoleAction, webAction)
+
+	consoleAccountIDs := resolveProviderAccountIDs(requestItem.Accounts, consoleEmailIndex)
+	webAccountIDs := resolveProviderAccountIDs(requestItem.Accounts, webEmailIndex)
+	result.SkippedAccounts = skippedEmails(requestItem.Accounts, consoleEmailIndex, webEmailIndex)
+
+	if len(consoleAccountIDs) > 0 {
+		assignmentResult, assignError := handler.egress.AssignAccounts(
+			requestContext,
+			consoleNode.ID,
+			accountdomain.ProviderConsole,
+			consoleAccountIDs,
+			accountdomain.EgressAssignmentManual,
+		)
+		if assignError != nil {
+			result.Action = "failed"
+			result.Error = assignError.Error()
+			return result
+		}
+		result.ConsoleAssigned = assignmentResult.Assigned
+		result.Assigned += assignmentResult.Assigned
+	}
+
+	if len(webAccountIDs) > 0 {
+		assignmentResult, assignError := handler.egress.AssignAccounts(
+			requestContext,
+			webNode.ID,
+			accountdomain.ProviderWeb,
+			webAccountIDs,
+			accountdomain.EgressAssignmentManual,
+		)
+		if assignError != nil {
+			result.Action = "failed"
+			result.Error = assignError.Error()
+			return result
+		}
+		result.WebAssigned = assignmentResult.Assigned
+		result.Assigned += assignmentResult.Assigned
+	}
+
+	return result
+}
+
+func (handler *Handler) deleteSlotNodes(
+	requestContext context.Context,
+	requestItem slotRequest,
+	result slotResult,
+	consoleEmailIndex map[string][]uint64,
+	webEmailIndex map[string][]uint64,
+	nodeByName map[string]egressdomain.PublicNode,
+) slotResult {
+	result.SkippedAccounts = skippedEmails(requestItem.Accounts, consoleEmailIndex, webEmailIndex)
+
+	consoleDeleted, consoleNodeID, consoleError := handler.deleteNamedNode(requestContext, result.NodeName, nodeByName)
+	if consoleError != nil {
+		result.Action = "failed"
+		result.Error = consoleError.Error()
+		return result
+	}
+	if consoleNodeID != "" {
+		result.NodeID = consoleNodeID
+	}
+
+	webDeleted, webNodeID, webError := handler.deleteNamedNode(requestContext, result.WebNodeName, nodeByName)
+	if webError != nil {
+		result.Action = "failed"
+		result.Error = webError.Error()
+		return result
+	}
+	if webNodeID != "" {
+		result.WebNodeID = webNodeID
+	}
+
+	if consoleDeleted || webDeleted {
+		result.Action = "deleted"
+		return result
+	}
+	result.Action = "absent"
+	return result
+}
+
+func (handler *Handler) deleteNamedNode(
+	requestContext context.Context,
+	nodeName string,
+	nodeByName map[string]egressdomain.PublicNode,
+) (deleted bool, nodeID string, err error) {
+	existingNode, exists := nodeByName[nodeName]
+	if !exists {
+		return false, "", nil
+	}
+	if deleteError := handler.egress.Delete(requestContext, existingNode.ID); deleteError != nil {
+		if errors.Is(deleteError, egressapp.ErrNotFound) {
+			delete(nodeByName, nodeName)
+			return false, strconv.FormatUint(existingNode.ID, 10), nil
+		}
+		return false, strconv.FormatUint(existingNode.ID, 10), deleteError
+	}
+	delete(nodeByName, nodeName)
+	return true, strconv.FormatUint(existingNode.ID, 10), nil
+}
+
+func (handler *Handler) upsertScopedNode(
+	requestContext context.Context,
+	nodeName string,
+	scope egressdomain.Scope,
+	proxyAddress string,
+	nodeByName map[string]egressdomain.PublicNode,
+) (egressdomain.PublicNode, string, error) {
 	proxyPoolEnabled := false
 	unlimitedAccountCapacity := 0
 	nodeInput := egressapp.Input{
 		Name:            nodeName,
-		Scope:           egressdomain.ScopeConsole,
+		Scope:           scope,
 		Enabled:         true,
 		ProxyPool:       &proxyPoolEnabled,
 		AccountCapacity: &unlimitedAccountCapacity,
 		ProxyURL:        &proxyAddress,
 	}
 
-	var (
-		publicNode egressdomain.PublicNode
-		applyError error
-	)
 	if existingNode, exists := nodeByName[nodeName]; exists {
-		publicNode, applyError = handler.egress.Update(requestContext, existingNode.ID, nodeInput)
-		result.Action = "updated"
-	} else {
-		publicNode, applyError = handler.egress.Create(requestContext, nodeInput)
-		result.Action = "created"
+		publicNode, updateError := handler.egress.Update(requestContext, existingNode.ID, nodeInput)
+		if updateError != nil {
+			return egressdomain.PublicNode{}, "", updateError
+		}
+		nodeByName[nodeName] = publicNode
+		return publicNode, "updated", nil
 	}
-	if applyError != nil {
-		result.Action = "failed"
-		result.Error = applyError.Error()
-		return result
+
+	publicNode, createError := handler.egress.Create(requestContext, nodeInput)
+	if createError != nil {
+		return egressdomain.PublicNode{}, "", createError
 	}
 	nodeByName[nodeName] = publicNode
-	result.NodeID = strconv.FormatUint(publicNode.ID, 10)
+	return publicNode, "created", nil
+}
 
-	accountIDs, skippedAccounts := resolveConsoleAccountIDs(requestItem.Accounts, consoleEmailIndex)
-	result.SkippedAccounts = skippedAccounts
-	if len(accountIDs) == 0 {
-		return result
+func mergeUpsertActions(consoleAction, webAction string) string {
+	if consoleAction == "updated" || webAction == "updated" {
+		return "updated"
 	}
-
-	assignmentResult, assignError := handler.egress.AssignAccounts(
-		requestContext,
-		publicNode.ID,
-		accountdomain.ProviderConsole,
-		accountIDs,
-		accountdomain.EgressAssignmentManual,
-	)
-	if assignError != nil {
-		result.Action = "failed"
-		result.Error = assignError.Error()
-		return result
-	}
-	result.Assigned = assignmentResult.Assigned
-	return result
+	return "created"
 }
 
 func (handler *Handler) buildNodeNameIndex(requestContext context.Context) (map[string]egressdomain.PublicNode, error) {
@@ -446,8 +639,8 @@ func (handler *Handler) buildNodeNameIndex(requestContext context.Context) (map[
 	return index, nil
 }
 
-func (handler *Handler) listConsoleAccounts(requestContext context.Context) ([]consoleAccountRef, error) {
-	accounts := make([]consoleAccountRef, 0)
+func (handler *Handler) listProviderAccounts(requestContext context.Context, provider accountdomain.Provider) ([]accountRef, error) {
+	accounts := make([]accountRef, 0)
 	page := 1
 	for {
 		views, total, err := handler.accounts.List(
@@ -455,13 +648,13 @@ func (handler *Handler) listConsoleAccounts(requestContext context.Context) ([]c
 			page,
 			accountLookupPageSize,
 			"",
-			accountapp.ListFilter{Provider: string(accountdomain.ProviderConsole)},
+			accountapp.ListFilter{Provider: string(provider)},
 		)
 		if err != nil {
 			return nil, err
 		}
 		for _, view := range views {
-			accounts = append(accounts, consoleAccountRef{
+			accounts = append(accounts, accountRef{
 				ID:    view.Credential.ID,
 				Name:  strings.TrimSpace(view.Credential.Name),
 				Email: strings.ToLower(strings.TrimSpace(view.Credential.Email)),
@@ -475,7 +668,7 @@ func (handler *Handler) listConsoleAccounts(requestContext context.Context) ([]c
 	return accounts, nil
 }
 
-func emailIndexFromAccounts(accounts []consoleAccountRef) map[string][]uint64 {
+func emailIndexFromAccounts(accounts []accountRef) map[string][]uint64 {
 	index := make(map[string][]uint64)
 	for _, account := range accounts {
 		if account.Email == "" {
@@ -527,7 +720,7 @@ func gmailCanonicalEmail(normalizedEmail string) string {
 	return localPart + "@gmail.com"
 }
 
-type consoleAccountRef struct {
+type accountRef struct {
 	ID    uint64
 	Name  string
 	Email string
@@ -537,12 +730,15 @@ func (handler *Handler) assignOverflowAccounts(
 	requestContext context.Context,
 	requests []slotRequest,
 	results []slotResult,
-	consoleAccounts []consoleAccountRef,
-	consoleEmailIndex map[string][]uint64,
+	providerAccounts []accountRef,
+	providerEmailIndex map[string][]uint64,
+	provider accountdomain.Provider,
+	nodeIDFromResult func(slotResult) string,
+	applyOverflowLabels func(result *slotResult, labels []string),
 ) (int, error) {
 	claimedAccountIDs := make(map[uint64]struct{})
 	for _, requestItem := range requests {
-		accountIDs, _ := resolveConsoleAccountIDs(requestItem.Accounts, consoleEmailIndex)
+		accountIDs := resolveProviderAccountIDs(requestItem.Accounts, providerEmailIndex)
 		for _, accountID := range accountIDs {
 			claimedAccountIDs[accountID] = struct{}{}
 		}
@@ -550,7 +746,10 @@ func (handler *Handler) assignOverflowAccounts(
 
 	activeIndexes := make([]int, 0)
 	for index, result := range results {
-		if result.NodeID == "" || result.Action == "failed" || result.Action == "deleted" || result.Action == "absent" {
+		if result.Action == "failed" || result.Action == "deleted" || result.Action == "absent" {
+			continue
+		}
+		if nodeIDFromResult(result) == "" {
 			continue
 		}
 		activeIndexes = append(activeIndexes, index)
@@ -562,7 +761,7 @@ func (handler *Handler) assignOverflowAccounts(
 		return 0, nil
 	}
 
-	overflowAccounts := leftoverConsoleAccounts(consoleAccounts, claimedAccountIDs)
+	overflowAccounts := leftoverAccounts(providerAccounts, claimedAccountIDs)
 	if len(overflowAccounts) == 0 {
 		return 0, nil
 	}
@@ -571,7 +770,7 @@ func (handler *Handler) assignOverflowAccounts(
 	labelsByResultIndex := make(map[int][]string)
 	for overflowIndex, overflowAccount := range overflowAccounts {
 		resultIndex := activeIndexes[overflowIndex%len(activeIndexes)]
-		nodeID, parseError := strconv.ParseUint(results[resultIndex].NodeID, 10, 64)
+		nodeID, parseError := strconv.ParseUint(nodeIDFromResult(results[resultIndex]), 10, 64)
 		if parseError != nil || nodeID == 0 {
 			continue
 		}
@@ -584,7 +783,7 @@ func (handler *Handler) assignOverflowAccounts(
 		assignmentResult, assignError := handler.egress.AssignAccounts(
 			requestContext,
 			nodeID,
-			accountdomain.ProviderConsole,
+			provider,
 			accountIDs,
 			accountdomain.EgressAssignmentManual,
 		)
@@ -594,15 +793,13 @@ func (handler *Handler) assignOverflowAccounts(
 		assignedTotal += assignmentResult.Assigned
 	}
 	for resultIndex, labels := range labelsByResultIndex {
-		results[resultIndex].OverflowAccounts = labels
-		results[resultIndex].OverflowAssigned = len(labels)
-		results[resultIndex].Assigned += len(labels)
+		applyOverflowLabels(&results[resultIndex], labels)
 	}
 	return assignedTotal, nil
 }
 
-func leftoverConsoleAccounts(accounts []consoleAccountRef, claimedAccountIDs map[uint64]struct{}) []consoleAccountRef {
-	leftovers := make([]consoleAccountRef, 0)
+func leftoverAccounts(accounts []accountRef, claimedAccountIDs map[uint64]struct{}) []accountRef {
+	leftovers := make([]accountRef, 0)
 	for _, account := range accounts {
 		if _, claimed := claimedAccountIDs[account.ID]; claimed {
 			continue
@@ -623,7 +820,7 @@ func leftoverConsoleAccounts(accounts []consoleAccountRef, claimedAccountIDs map
 	return leftovers
 }
 
-func overflowAccountLabel(account consoleAccountRef) string {
+func overflowAccountLabel(account accountRef) string {
 	if account.Name != "" {
 		return account.Name
 	}
@@ -633,16 +830,11 @@ func overflowAccountLabel(account consoleAccountRef) string {
 	return strconv.FormatUint(account.ID, 10)
 }
 
-func resolveConsoleAccountIDs(accountEmails []string, consoleEmailIndex map[string][]uint64) (accountIDs []uint64, skippedAccounts []string) {
+func resolveProviderAccountIDs(accountEmails []string, providerEmailIndex map[string][]uint64) []uint64 {
 	seenAccountIDs := make(map[uint64]struct{})
-	skippedAccounts = make([]string, 0)
+	accountIDs := make([]uint64, 0)
 	for _, rawEmail := range accountEmails {
-		matchedIDs := lookupConsoleAccountIDs(rawEmail, consoleEmailIndex)
-		if len(matchedIDs) == 0 {
-			skippedAccounts = append(skippedAccounts, strings.TrimSpace(rawEmail))
-			continue
-		}
-		for _, accountID := range matchedIDs {
+		for _, accountID := range lookupProviderAccountIDs(rawEmail, providerEmailIndex) {
 			if _, exists := seenAccountIDs[accountID]; exists {
 				continue
 			}
@@ -650,14 +842,14 @@ func resolveConsoleAccountIDs(accountEmails []string, consoleEmailIndex map[stri
 			accountIDs = append(accountIDs, accountID)
 		}
 	}
-	return accountIDs, skippedAccounts
+	return accountIDs
 }
 
-func lookupConsoleAccountIDs(rawEmail string, consoleEmailIndex map[string][]uint64) []uint64 {
+func lookupProviderAccountIDs(rawEmail string, providerEmailIndex map[string][]uint64) []uint64 {
 	seenAccountIDs := make(map[uint64]struct{})
 	matchedIDs := make([]uint64, 0)
 	for _, matchKey := range emailMatchKeys(rawEmail) {
-		for _, accountID := range consoleEmailIndex[matchKey] {
+		for _, accountID := range providerEmailIndex[matchKey] {
 			if _, exists := seenAccountIDs[accountID]; exists {
 				continue
 			}
@@ -668,7 +860,14 @@ func lookupConsoleAccountIDs(rawEmail string, consoleEmailIndex map[string][]uin
 	return matchedIDs
 }
 
-func skippedEmails(accountEmails []string, consoleEmailIndex map[string][]uint64) []string {
-	_, skippedAccounts := resolveConsoleAccountIDs(accountEmails, consoleEmailIndex)
+func skippedEmails(accountEmails []string, consoleEmailIndex, webEmailIndex map[string][]uint64) []string {
+	skippedAccounts := make([]string, 0)
+	for _, rawEmail := range accountEmails {
+		consoleMatches := lookupProviderAccountIDs(rawEmail, consoleEmailIndex)
+		webMatches := lookupProviderAccountIDs(rawEmail, webEmailIndex)
+		if len(consoleMatches) == 0 && len(webMatches) == 0 {
+			skippedAccounts = append(skippedAccounts, strings.TrimSpace(rawEmail))
+		}
+	}
 	return skippedAccounts
 }

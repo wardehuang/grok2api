@@ -85,6 +85,38 @@ func TestSyncAccountIdentityUnauthorizedInvalidatesCurrentProviderAccount(t *tes
 	if web.AuthStatus != accountdomain.AuthStatusReauthRequired || !web.Enabled || web.FailureCount != 0 {
 		t.Fatalf("identity unauthorized state = %#v", web)
 	}
+	if adapter.identityCalls != identitySyncUnauthorizedAttempts {
+		t.Fatalf("identity calls = %d, want %d", adapter.identityCalls, identitySyncUnauthorizedAttempts)
+	}
+}
+
+func TestSyncAccountIdentityUnauthorizedRetriesThenSucceeds(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	service, repo, adapter := newWebAccountSettingsTestService(t)
+	web, _, err := repo.UpsertByIdentity(ctx, accountdomain.Credential{
+		Provider: accountdomain.ProviderWeb, AuthType: accountdomain.AuthTypeSSO, Name: "web", SourceKey: "sso:" + "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb01",
+		EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: accountdomain.AuthStatusReauthRequired,
+		LastError: "stale",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.identityUnauthorizedFails = identitySyncUnauthorizedAttempts - 1
+	adapter.identity = provider.AccountIdentity{UserID: "55555555-5555-4555-8555-555555555555", Email: "retry@example.com"}
+	if err := service.SyncAccountIdentity(ctx, web.ID); err != nil {
+		t.Fatal(err)
+	}
+	web, err = repo.Get(ctx, web.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if web.AuthStatus != accountdomain.AuthStatusActive || web.LastError != "" || web.UserID != "55555555-5555-4555-8555-555555555555" {
+		t.Fatalf("retry success state = %#v", web)
+	}
+	if adapter.identityCalls != identitySyncUnauthorizedAttempts {
+		t.Fatalf("identity calls = %d, want %d", adapter.identityCalls, identitySyncUnauthorizedAttempts)
+	}
 }
 
 func TestSyncWebAccountIdentityFillsGatewayUUIDWhenOnlyEmailIsKnown(t *testing.T) {

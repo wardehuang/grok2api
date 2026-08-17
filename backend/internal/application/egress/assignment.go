@@ -3,7 +3,10 @@ package egress
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math/rand/v2"
 	"sort"
+	"strings"
 	"time"
 
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
@@ -20,6 +23,58 @@ type RebalanceResult struct {
 	Assigned   int
 	Rebalanced int
 	Unplaced   int
+}
+
+// AssignRandomAvailableNode 在账号尚未绑定出口时，从兼容作用域且已配置代理的启用节点中随机选一个绑定。
+// 用于导入新账号：先绑定代理再跑身份/额度等上游请求。已绑定账号或无可用节点时 assigned=false。
+func (s *Service) AssignRandomAvailableNode(ctx context.Context, provider accountdomain.Provider, accountID uint64) (uint64, bool, error) {
+	if s.accounts == nil || accountID == 0 || !provider.IsValid() {
+		return 0, false, nil
+	}
+	s.assignmentMu.Lock()
+	defer s.assignmentMu.Unlock()
+
+	credential, err := s.accounts.Get(ctx, accountID)
+	if err != nil {
+		return 0, false, err
+	}
+	if credential.Provider != provider {
+		return 0, false, fmt.Errorf("%w: 账号来源与绑定请求不一致", ErrInvalidInput)
+	}
+	if credential.EgressNodeID != 0 {
+		return credential.EgressNodeID, false, nil
+	}
+
+	nodes, err := s.repository.ListEgressNodes(ctx, "", repository.SortQuery{})
+	if err != nil {
+		return 0, false, err
+	}
+	candidates := make([]domain.Node, 0, len(nodes))
+	for _, node := range nodes {
+		if !node.Enabled || strings.TrimSpace(node.EncryptedProxyURL) == "" {
+			continue
+		}
+		if !scopeSupportsProvider(node.Scope, provider) {
+			continue
+		}
+		if node.AccountCapacity > 0 && node.AssignedAccountCount >= node.AccountCapacity {
+			continue
+		}
+		candidates = append(candidates, node)
+	}
+	if len(candidates) == 0 {
+		return 0, false, nil
+	}
+	selected := candidates[rand.IntN(len(candidates))]
+	assignedAt := time.Now().UTC()
+	updated, err := s.accounts.UpdateEgressBindings(ctx, provider, []uint64{accountID}, &selected.ID, accountdomain.EgressAssignmentAuto, assignedAt)
+	if err != nil {
+		return 0, false, err
+	}
+	if updated == 0 {
+		return 0, false, nil
+	}
+	return selected.ID, true, nil
 }
 
 // RebalanceAccounts allocates only accounts that are either unbound or

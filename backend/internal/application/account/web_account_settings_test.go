@@ -181,24 +181,29 @@ func newWebAccountSettingsTestService(t *testing.T) (*Service, *relational.Accou
 }
 
 type webAccountSettingsAdapterStub struct {
-	mu            sync.Mutex
-	terms         int
-	birthDate     time.Time
-	birthCalls    int
-	nsfw          int
-	err           error
-	calls         map[uint64][]string
-	failures      map[uint64]map[string]error
-	afterCall     func(string)
-	identity      provider.AccountIdentity
-	identityErr   error
-	identityCalls int
+	mu                         sync.Mutex
+	terms                      int
+	birthDate                  time.Time
+	birthCalls                 int
+	nsfw                       int
+	err                        error
+	calls                      map[uint64][]string
+	failures                   map[uint64]map[string]error
+	afterCall                  func(string)
+	identity                   provider.AccountIdentity
+	identityErr                error
+	identityUnauthorizedFails  int
+	identityCalls              int
 }
 
 func (a *webAccountSettingsAdapterStub) SyncAccountIdentity(context.Context, accountdomain.Credential) (provider.AccountIdentity, error) {
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.identityCalls++
-	a.mu.Unlock()
+	if a.identityUnauthorizedFails > 0 {
+		a.identityUnauthorizedFails--
+		return provider.AccountIdentity{}, provider.ErrUnauthorized
+	}
 	return a.identity, a.identityErr
 }
 

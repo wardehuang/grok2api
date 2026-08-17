@@ -881,6 +881,45 @@ func TestRefreshQuotaUnauthorizedMarksWebAccountInvalid(t *testing.T) {
 	}
 }
 
+func TestRefreshQuotaSuccessClearsReauthRequired(t *testing.T) {
+	ctx := context.Background()
+	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "quota-clear-reauth.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	accounts := relational.NewAccountRepository(database)
+	credential, _, err := accounts.UpsertByIdentity(ctx, accountdomain.Credential{
+		Provider: accountdomain.ProviderWeb, AuthType: accountdomain.AuthTypeSSO,
+		Name: "web-reauth", SourceKey: "web-reauth", EncryptedAccessToken: "encrypted",
+		Enabled: true, AuthStatus: accountdomain.AuthStatusReauthRequired, LastError: "stale",
+		UserID: "66666666-6666-4666-8666-666666666666",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	adapter := &quotaCountingAdapter{
+		fullWindows: []accountdomain.QuotaWindow{{
+			Mode: "fast", Remaining: 10, Total: 10, WindowSeconds: 86400, SyncedAt: &now, Source: accountdomain.QuotaSourceUpstream,
+		}},
+	}
+	service := NewService(accounts, nil, nil, nil, provider.NewRegistry(adapter), nil, nil)
+	if _, err := service.RefreshQuota(ctx, credential.ID); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := accounts.Get(ctx, credential.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.AuthStatus != accountdomain.AuthStatusActive || stored.LastError != "" {
+		t.Fatalf("account state = %#v", stored)
+	}
+}
+
 type deniedQuotaRefreshLock struct{}
 
 func (deniedQuotaRefreshLock) Acquire(context.Context, string, time.Duration) (func(), bool, error) {
@@ -892,6 +931,7 @@ type quotaCountingAdapter struct {
 	fullCalls     atomic.Int64
 	identityCalls atomic.Int64
 	fullErr       error
+	fullWindows   []accountdomain.QuotaWindow
 	modeStarted   chan struct{}
 	modeRelease   chan struct{}
 }
@@ -974,9 +1014,27 @@ func (a *quotaCountingAdapter) Definition() provider.Definition {
 	}
 }
 
-func (a *quotaCountingAdapter) SyncQuota(context.Context, accountdomain.Credential) (provider.QuotaSnapshot, error) {
+func (a *quotaCountingAdapter) SyncQuota(_ context.Context, credential accountdomain.Credential) (provider.QuotaSnapshot, error) {
 	a.fullCalls.Add(1)
-	return provider.QuotaSnapshot{}, a.fullErr
+	if a.fullErr != nil {
+		return provider.QuotaSnapshot{}, a.fullErr
+	}
+	now := time.Now().UTC()
+	windows := append([]accountdomain.QuotaWindow(nil), a.fullWindows...)
+	for index := range windows {
+		windows[index].AccountID = credential.ID
+		if windows[index].SyncedAt == nil {
+			syncedAt := now
+			windows[index].SyncedAt = &syncedAt
+		}
+		if windows[index].UpdatedAt.IsZero() {
+			windows[index].UpdatedAt = now
+		}
+		if windows[index].Source == "" {
+			windows[index].Source = accountdomain.QuotaSourceUpstream
+		}
+	}
+	return provider.QuotaSnapshot{SyncedAt: now, Windows: windows}, nil
 }
 
 func (a *quotaCountingAdapter) SyncAccountIdentity(context.Context, accountdomain.Credential) (provider.AccountIdentity, error) {

@@ -426,8 +426,15 @@ type Service struct {
 	autoCleanWake          chan struct{}
 	excludeBuildBotFlagged bool
 	buildBotFlagCache      *resultcache.Cache[string, []uint64]
-	logger                 *slog.Logger
-	now                    func() time.Time
+	// randomEgress 在新账号入库后、初始同步前尽力绑定随机代理节点；nil 时跳过。
+	randomEgress randomEgressAssigner
+	logger       *slog.Logger
+	now          func() time.Time
+}
+
+// randomEgressAssigner 由 egress.Service 注入，避免 account 包直接依赖节点仓储细节。
+type randomEgressAssigner interface {
+	AssignRandomAvailableNode(ctx context.Context, provider accountdomain.Provider, accountID uint64) (nodeID uint64, assigned bool, err error)
 }
 
 func (s *Service) SetQuotaRecoveryQueue(queue repository.QuotaRecoveryQueue) {
@@ -512,6 +519,11 @@ func (s *Service) SetDetectPool(pool *batch.Pool) {
 	if pool != nil {
 		s.detectPool = pool
 	}
+}
+
+// SetRandomEgressAssigner 注入新账号随机代理绑定实现；nil 关闭该行为。
+func (s *Service) SetRandomEgressAssigner(value randomEgressAssigner) {
+	s.randomEgress = value
 }
 
 func (s *Service) SetLogger(logger *slog.Logger) {
@@ -1452,8 +1464,12 @@ func (s *Service) persistImportedSeeds(ctx context.Context, seeds []provider.Cre
 		if err != nil {
 			return ImportResult{}, err
 		}
-		for _, value := range stored {
+		for index, value := range stored {
 			result.AccountIDs = append(result.AccountIDs, value.ID)
+			// 新账号先随机绑定代理节点，再跑身份/额度等后续上游请求。
+			if value.Created {
+				s.assignRandomEgressBestEffort(ctx, values[index].Provider, value.ID)
+			}
 			s.reconcileProviderLinksBestEffort(ctx, value.ID)
 			if observer != nil {
 				if err := observer(value.ID); err != nil {
@@ -2219,6 +2235,41 @@ func (s *Service) MarkReauthRequired(ctx context.Context, id uint64, reason stri
 	return nil
 }
 
+// clearReauthRequired 在上游额度/身份同步成功后把 reauthRequired 恢复为 active。
+// 幂等：已是 active 时直接返回。
+func (s *Service) clearReauthRequired(ctx context.Context, id uint64) error {
+	value, err := s.accounts.Get(ctx, id)
+	if err != nil {
+		return mapRepositoryError(err)
+	}
+	if value.AuthStatus != accountdomain.AuthStatusReauthRequired {
+		return nil
+	}
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), credentialStateWriteTimeout)
+	defer cancel()
+	value.AuthStatus = accountdomain.AuthStatusActive
+	value.LastError = ""
+	if _, err := s.accounts.Update(writeCtx, value); err != nil {
+		return mapRepositoryError(err)
+	}
+	return nil
+}
+
+// assignRandomEgressBestEffort 新账号尽力绑定随机代理；失败只记日志，不阻断导入。
+func (s *Service) assignRandomEgressBestEffort(ctx context.Context, providerValue accountdomain.Provider, accountID uint64) {
+	if s.randomEgress == nil || accountID == 0 || !providerValue.IsValid() {
+		return
+	}
+	nodeID, assigned, err := s.randomEgress.AssignRandomAvailableNode(ctx, providerValue, accountID)
+	if err != nil {
+		s.logger.Warn("account_import_random_egress_failed", "account_id", accountID, "provider", providerValue, "error", err)
+		return
+	}
+	if assigned {
+		s.logger.Info("account_import_random_egress_assigned", "account_id", accountID, "provider", providerValue, "egress_node_id", nodeID)
+	}
+}
+
 // markSSOCredentialRejected 在上游明确返回 401 后可靠持久化失效状态。
 // 状态写入不继承客户端取消，避免已经确认失效的账号因请求断开继续留在号池。
 func (s *Service) markSSOCredentialRejected(ctx context.Context, value accountdomain.Credential, reason string) error {
@@ -2786,6 +2837,10 @@ func (s *Service) refreshQuota(ctx context.Context, id uint64) (quotaRefreshResu
 	}
 	if err := s.accounts.ReplaceQuotaWindows(ctx, id, snapshot.Tier, snapshot.SyncedAt, snapshot.Windows); err != nil {
 		return quotaRefreshResult{}, err
+	}
+	// 额度上游成功：清除历史 reauth 粘滞，避免「额度能刷但 UI 仍显示失效」。
+	if clearErr := s.clearReauthRequired(ctx, id); clearErr != nil {
+		s.logger.Warn("account_reauth_clear_after_quota_failed", "account_id", id, "error", clearErr)
 	}
 	return quotaRefreshResult{Credential: value, Windows: snapshot.Windows}, nil
 }

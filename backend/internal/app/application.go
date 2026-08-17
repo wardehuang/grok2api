@@ -312,6 +312,8 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	egressService.SetClearanceManager(egressManager)
 	egressService.SetNodeProber(egressManager)
 	egressService.SetOperationsConfigInvalidator(egressManager)
+	// 导入新账号时先随机绑代理，再做身份/额度同步。
+	accountService.SetRandomEgressAssigner(egressService)
 	egressManager.SetFailureProber(egressService.TestNode)
 	clientKeyService := clientkeyapp.NewService(clientKeyRepo, rateLimiter, concurrency, cfg.ClientKeyDefaults.RPMLimit, cfg.ClientKeyDefaults.MaxConcurrent, cipher)
 	qualityGuardIdentity, err := clientKeyService.EnsureQualityGuardIdentity(ctx, cfg.QualityGuard.Enabled)
