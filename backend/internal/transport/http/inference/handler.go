@@ -23,6 +23,7 @@ import (
 	mediadomain "github.com/chenyme/grok2api/backend/internal/domain/media"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	"github.com/chenyme/grok2api/backend/internal/pkg/mediafile"
 	"github.com/chenyme/grok2api/backend/internal/pkg/neterror"
 	"github.com/chenyme/grok2api/backend/internal/transport/http/middleware"
 	"github.com/gin-gonic/gin"
@@ -908,35 +909,34 @@ func (h *Handler) getVideo(c *gin.Context) {
 		writeGatewayError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, videoGenerationResponse(job, h.videoResultURL(job)))
+	c.JSON(http.StatusOK, videoGenerationResponse(job, h.videoPlaybackURL(job)))
 }
 
-func (h *Handler) resolvedPublicAPIBaseURL() string {
+func (h *Handler) publicURL(path string) string {
 	baseURL := h.publicAPIBaseURL
 	if h.publicBaseURL != nil {
-		baseURL = h.publicBaseURL()
+		baseURL = strings.TrimRight(strings.TrimSpace(h.publicBaseURL()), "/")
 	}
-	return strings.TrimRight(strings.TrimSpace(baseURL), "/")
-}
-
-// videoResultURL 优先返回免鉴权本地媒体地址；无本地资产时回退到需 API key 的 content 路径。
-func (h *Handler) videoResultURL(job mediadomain.Job) string {
-	if assetID := strings.TrimSpace(job.ResultAssetID); assetID != "" {
-		path := "/v1/media/videos/" + url.PathEscape(assetID)
-		if baseURL := h.resolvedPublicAPIBaseURL(); baseURL != "" {
-			return baseURL + path
-		}
+	if baseURL == "" {
 		return path
 	}
-	return h.videoContentURL(job.ID)
+	return baseURL + path
 }
 
 func (h *Handler) videoContentURL(jobID string) string {
-	path := "/v1/videos/" + url.PathEscape(jobID) + "/content"
-	if baseURL := h.resolvedPublicAPIBaseURL(); baseURL != "" {
-		return baseURL + path
+	return h.publicURL("/v1/videos/" + url.PathEscape(jobID) + "/content")
+}
+
+// videoPlaybackURL prefers the stored asset served by the public media route, so the
+// returned link opens directly in browsers and players. /v1/videos/{id}/content needs
+// the client API key, which makes the URL unusable outside an authenticated client.
+// Images already return their public media URL; this keeps video consistent. Jobs
+// without a stored asset keep the protected content endpoint.
+func (h *Handler) videoPlaybackURL(job mediadomain.Job) string {
+	if assetID := strings.TrimSpace(job.ResultAssetID); assetID != "" {
+		return h.publicURL("/v1/media/videos/" + url.PathEscape(assetID))
 	}
-	return path
+	return h.videoContentURL(job.ID)
 }
 
 func (h *Handler) getVideoContent(c *gin.Context) {
@@ -950,10 +950,10 @@ func (h *Handler) getVideoContent(c *gin.Context) {
 		return
 	}
 	defer func() { _ = body.Close() }()
-	writeVideoContent(c, body, contentType, size)
+	writeVideoContent(c, body, contentType, size, strings.TrimSpace(c.Param("requestId")))
 }
 
-func writeVideoContent(c *gin.Context, body io.Reader, contentType string, size int64) {
+func writeVideoContent(c *gin.Context, body io.Reader, contentType string, size int64, downloadName string) {
 	if size > maxMediaResponseTransferBytes {
 		writeOpenAIError(c, http.StatusBadGateway, "media_too_large", "上游媒体超过 2 GiB 安全上限")
 		return
@@ -963,7 +963,8 @@ func writeVideoContent(c *gin.Context, body io.Reader, contentType string, size 
 		writeOpenAIError(c, http.StatusBadGateway, "invalid_media_type", "上游视频服务返回了不受支持的内容类型")
 		return
 	}
-	c.Header("Content-Disposition", "inline")
+	// Clients that save the response need an extension to get a playable file.
+	c.Header("Content-Disposition", mediafile.VideoContentDisposition(downloadName, contentType))
 	c.Header("Cache-Control", "private, no-store")
 	c.Header("X-Content-Type-Options", "nosniff")
 	c.Header("Content-Security-Policy", "default-src 'none'; sandbox")
@@ -1388,7 +1389,7 @@ func (i *responseInspector) Inspect(chunk []byte) {
 			i.observeTerminal(value)
 			if !bytes.Equal(value, []byte("[DONE]")) {
 				metadata := extractMetadata(value)
-				if hasUsageSignal(metadata.Usage) {
+				if hasUsageMetadata(metadata.Usage) {
 					if metadata.Usage.ResponseModel == "" {
 						metadata.Usage.ResponseModel = i.metadata.Model
 					}
@@ -1800,6 +1801,7 @@ func (value responseUsageDTO) toGatewayUsage(responseModel string) gateway.Usage
 		reasoning = value.OutputTokensDetails.ThinkingTokens
 	}
 	return gateway.Usage{
+		Reported:    true,
 		InputTokens: input, CachedInputTokens: cached,
 		OutputTokens: output, ReasoningTokens: reasoning,
 		TotalTokens: total, CostInUSDTicks: value.CostInUSDTicks,
@@ -1809,8 +1811,8 @@ func (value responseUsageDTO) toGatewayUsage(responseModel string) gateway.Usage
 	}
 }
 
-func hasUsageSignal(usage gateway.Usage) bool {
-	return usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.TotalTokens > 0 ||
+func hasUsageMetadata(usage gateway.Usage) bool {
+	return usage.Reported || usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.TotalTokens > 0 ||
 		usage.CachedInputTokens > 0 || usage.ReasoningTokens > 0 || usage.CostInUSDTicks > 0 ||
 		usage.NumSourcesUsed > 0 || usage.NumServerSideToolsUsed > 0 ||
 		usage.ContextInputTokens > 0 || usage.ContextOutputTokens > 0
@@ -1819,6 +1821,7 @@ func hasUsageSignal(usage gateway.Usage) bool {
 // mergeGatewayUsage merges usage from multiple streaming frames; non-zero fields overwrite,
 // preventing a later partial frame from erasing an already parsed cache hit.
 func mergeGatewayUsage(base, next gateway.Usage) gateway.Usage {
+	base.Reported = base.Reported || next.Reported
 	if next.InputTokens > 0 {
 		base.InputTokens = next.InputTokens
 	}
@@ -1926,7 +1929,7 @@ func writeGatewayError(c *gin.Context, err error) {
 	case errors.Is(err, gateway.ErrResponseStateUnsupported), errors.Is(err, gateway.ErrConversationUnsupported):
 		status, code = http.StatusBadRequest, "unsupported_parameter"
 		message = err.Error()
-	case errors.Is(err, gateway.ErrVideoInputTooLarge), errors.Is(err, gateway.ErrVideoInputUnavailable):
+	case errors.Is(err, gateway.ErrVideoInputTooLarge), errors.Is(err, gateway.ErrVideoInputUnavailable), errors.Is(err, gateway.ErrVideoParameterInvalid):
 		status, code = http.StatusBadRequest, "invalid_request"
 		message = err.Error()
 	case errors.Is(err, gateway.ErrVideoOperationUnsupported):

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -119,9 +120,29 @@ func TestWriteVideoContentRejectsDeclaredOversizeMedia(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(recorder)
-	writeVideoContent(context, strings.NewReader("ignored"), "video/mp4", maxMediaResponseTransferBytes+1)
+	writeVideoContent(context, strings.NewReader("ignored"), "video/mp4", maxMediaResponseTransferBytes+1, "video_request_1")
 	if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "media_too_large") {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// A saved response needs an extension or the file will not open in a player.
+func TestWriteVideoContentNamesDownloadWithExtension(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, testCase := range []struct {
+		contentType string
+		want        string
+	}{
+		{"video/mp4", `inline; filename="video_request_1.mp4"`},
+		{"video/webm", `inline; filename="video_request_1.webm"`},
+		{"video/quicktime", `inline; filename="video_request_1.mov"`},
+	} {
+		recorder := httptest.NewRecorder()
+		context, _ := gin.CreateTestContext(recorder)
+		writeVideoContent(context, strings.NewReader("body"), testCase.contentType, 4, "video_request_1")
+		if got := recorder.Header().Get("Content-Disposition"); got != testCase.want {
+			t.Fatalf("%s disposition = %q, want %q", testCase.contentType, got, testCase.want)
+		}
 	}
 }
 
@@ -134,25 +155,29 @@ func TestVideoContentURLUsesConfiguredPublicAPIBase(t *testing.T) {
 	}
 }
 
-func TestVideoResultURLPrefersUnauthenticatedMediaAsset(t *testing.T) {
+// A completed job whose local asset has been verified by the gateway must point
+// at the public media route. /v1/videos/{id}/content requires the client API key
+// and is therefore not usable in a browser or player.
+func TestVideoPlaybackURLPrefersPublicAssetRoute(t *testing.T) {
 	handler := NewHandler(nil, nil, 1<<20, "https://api.example.com/grok2api/")
 	job := mediadomain.Job{
 		ID: "video_request_1", Status: mediadomain.StatusCompleted,
-		ResultAssetID: "vid_asset_0001", UpstreamURL: "https://assets.grok.com/source.mp4",
+		UpstreamURL: "https://assets.grok.com/source.mp4", ResultAssetID: "vid_abc123",
 	}
-	response := videoGenerationResponse(job, handler.videoResultURL(job))
+	response := videoGenerationResponse(job, handler.videoPlaybackURL(job))
 	video, ok := response["video"].(gin.H)
-	if !ok || video["url"] != "https://api.example.com/grok2api/v1/media/videos/vid_asset_0001" {
+	if !ok || video["url"] != "https://api.example.com/grok2api/v1/media/videos/vid_abc123" {
 		t.Fatalf("response = %#v", response)
 	}
-	jobWithoutAsset := mediadomain.Job{
-		ID: "video_request_2", Status: mediadomain.StatusCompleted,
-		UpstreamURL: "https://assets.grok.com/source.mp4",
-	}
-	fallback := videoGenerationResponse(jobWithoutAsset, handler.videoResultURL(jobWithoutAsset))
-	fallbackVideo, ok := fallback["video"].(gin.H)
-	if !ok || fallbackVideo["url"] != "https://api.example.com/grok2api/v1/videos/video_request_2/content" {
-		t.Fatalf("fallback response = %#v", fallback)
+}
+
+// Without a readable stored asset the protected content endpoint remains the
+// only option and can still fall back to the upstream download path.
+func TestVideoPlaybackURLFallsBackToContentEndpoint(t *testing.T) {
+	handler := NewHandler(nil, nil, 1<<20, "https://api.example.com/grok2api/")
+	job := mediadomain.Job{ID: "video_request_1", Status: mediadomain.StatusCompleted}
+	if got := handler.videoPlaybackURL(job); got != "https://api.example.com/grok2api/v1/videos/video_request_1/content" {
+		t.Fatalf("fallback URL = %q", got)
 	}
 }
 
@@ -169,7 +194,7 @@ func TestVideoContentURLFollowsRuntimePublicAPIBase(t *testing.T) {
 		t.Fatalf("updated URL = %q", got)
 	}
 	job := mediadomain.Job{ID: "video_request_3", ResultAssetID: "vid_hot_1"}
-	if got := handler.videoResultURL(job); got != "https://new.example.com/api/v1/media/videos/vid_hot_1" {
+	if got := handler.videoPlaybackURL(job); got != "https://new.example.com/api/v1/media/videos/vid_hot_1" {
 		t.Fatalf("media URL = %q", got)
 	}
 }
@@ -196,6 +221,19 @@ func TestGatewayErrorMapsOversizedVideoInputToBadRequest(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
 	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), `"code":"invalid_request"`) || !strings.Contains(recorder.Body.String(), "32 MiB") {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestGatewayErrorMapsInvalidVideoParametersToBadRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/", func(c *gin.Context) {
+		writeGatewayError(c, fmt.Errorf("%w: Console reference_images 最多 7 张", gateway.ErrVideoParameterInvalid))
+	})
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), `"code":"invalid_request"`) || !strings.Contains(recorder.Body.String(), "最多 7 张") {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
@@ -443,7 +481,7 @@ func TestVideoContentRejectsUnsafeContentType(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(recorder)
-	writeVideoContent(context, strings.NewReader(`<script id="must-not-reflect">alert(1)</script>`), "text/html", -1)
+	writeVideoContent(context, strings.NewReader(`<script id="must-not-reflect">alert(1)</script>`), "text/html", -1, "video_request_1")
 	if recorder.Code != http.StatusBadGateway || strings.Contains(recorder.Body.String(), "must-not-reflect") {
 		t.Fatalf("status=%d headers=%#v body=%s", recorder.Code, recorder.Header(), recorder.Body.String())
 	}
@@ -902,6 +940,21 @@ func TestAnthropicUsageReconstructsCacheCreationAndSaturates(t *testing.T) {
 	usage = normalizeMetadataUsage(overflow, streamProtocolAnthropic).Usage
 	if usage.InputTokens != math.MaxInt64 || usage.TotalTokens != math.MaxInt64 {
 		t.Fatalf("anthropic saturated usage = %#v", usage)
+	}
+}
+
+func TestExtractMetadataPreservesReportedZeroUsage(t *testing.T) {
+	metadata := extractMetadata([]byte(`{"id":"resp_zero","usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}}`))
+	if !metadata.Usage.Reported {
+		t.Fatalf("zero usage object was treated as missing: %#v", metadata.Usage)
+	}
+	if metadata.Usage.InputTokens != 0 || metadata.Usage.OutputTokens != 0 || metadata.Usage.TotalTokens != 0 {
+		t.Fatalf("zero usage object changed values: %#v", metadata.Usage)
+	}
+
+	missing := extractMetadata([]byte(`{"id":"resp_missing"}`))
+	if missing.Usage.Reported {
+		t.Fatalf("missing usage object was treated as reported: %#v", missing.Usage)
 	}
 }
 

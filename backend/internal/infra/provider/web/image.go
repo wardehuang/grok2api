@@ -24,6 +24,7 @@ import (
 	mediadomain "github.com/chenyme/grok2api/backend/internal/domain/media"
 	"github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider/conversation"
 )
 
 const (
@@ -341,6 +342,10 @@ func (a *Adapter) generateLiteImage(ctx context.Context, request provider.ImageG
 	for len(urls) < count {
 		value, err := a.generateLiteImageURL(ctx, request.Credential, spec, request.Prompt)
 		if err != nil {
+			var mediaErr *webMediaUpstreamError
+			if errors.As(err, &mediaErr) && len(urls) == 0 {
+				return mediaErr.providerResponse(), nil
+			}
 			var upstreamErr *liteUpstreamError
 			if errors.As(err, &upstreamErr) && len(urls) == 0 {
 				return upstreamErr.Response(), nil
@@ -378,18 +383,33 @@ func (e *liteUpstreamError) Response() *provider.Response {
 
 func (a *Adapter) generateLiteImageURL(ctx context.Context, credential account.Credential, spec ModelSpec, prompt string) (string, error) {
 	for attempt := 0; attempt < 2; attempt++ {
-		upstream, lease, _, statsigTarget, err := a.openChat(ctx, credential, "", spec, normalizedChatInput{Prompt: "Drawing: " + prompt}, false)
+		upstream, lease, _, statsigTarget, err := a.openChat(ctx, credential, "", spec, normalizedChatInput{Prompt: "Drawing: " + prompt}, gatewayOpenOptions{deferForbidden: true})
 		if err != nil {
 			return "", err
 		}
 		if upstream.StatusCode < 200 || upstream.StatusCode >= 300 {
-			body, _ := io.ReadAll(io.LimitReader(upstream.Body, 1<<20))
+			body, _ := io.ReadAll(io.LimitReader(upstream.Body, webMediaDiagnosticBodyLimit+1))
 			_ = upstream.Body.Close()
+			truncated := len(body) > webMediaDiagnosticBodyLimit
+			if truncated {
+				body = body[:webMediaDiagnosticBodyLimit]
+			}
 			if upstream.StatusCode == http.StatusForbidden {
-				if attempt == 0 && a.invalidateSignedStatsig(http.MethodPost, statsigTarget) {
-					lease.Release()
-					continue
+				upstreamErr := newWebMediaUpstreamError(upstream.StatusCode, body, truncated)
+				a.logWebMediaUpstreamRejection("image_lite_handshake", upstream, upstreamErr)
+				if isClearanceRefreshableMediaError(upstreamErr) {
+					// The failed WebSocket handshake invalidates the current browser
+					// session. Statsig is independent and must not gate reacquiring
+					// a fresh lease for the retry.
+					lease.InvalidateClearance()
+					_ = a.invalidateSignedStatsig(http.MethodPost, statsigTarget)
+					if attempt == 0 {
+						lease.Release()
+						continue
+					}
 				}
+				lease.Release()
+				return "", upstreamErr
 			}
 			a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, upstream.StatusCode, nil)
 			lease.Release()
@@ -420,7 +440,11 @@ func (a *Adapter) generateLiteImageURL(ctx context.Context, credential account.C
 			status := 0
 			if errors.Is(consumeErr, errWebAntiBot) {
 				status = http.StatusForbidden
-				if attempt == 0 && a.invalidateSignedStatsig(http.MethodPost, statsigTarget) {
+				// A challenge can arrive inside an otherwise successful stream,
+				// so the handshake path cannot invalidate it for us.
+				lease.InvalidateClearance()
+				if attempt == 0 {
+					_ = a.invalidateSignedStatsig(http.MethodPost, statsigTarget)
 					lease.Release()
 					continue
 				}
@@ -470,9 +494,9 @@ func (a *Adapter) generateLiteImageURL(ctx context.Context, credential account.C
 	return "", fmt.Errorf("Grok Web Lite 图片签名刷新失败")
 }
 
-func (a *Adapter) forwardLiteChatCompletion(ctx context.Context, request provider.ResponseResourceRequest, input openAIRequest, normalized normalizedChatInput, spec ModelSpec) (*provider.Response, error) {
+func (a *Adapter) forwardImageChatCompletion(ctx context.Context, request provider.ResponseResourceRequest, input openAIRequest, normalized normalizedChatInput, spec ModelSpec) (*provider.Response, error) {
 	if len(normalized.Attachments) > 0 {
-		return invalidImageRequest("grok-imagine-image-lite 只支持纯文本生图；附件请使用对应的图片编辑或对话模型")
+		return invalidImageRequest("文生图模型只接受当前用户消息中的纯文本；图生图请使用 grok-imagine-image-edit 和 /v1/images/edits")
 	}
 	count := 1
 	format := "url"
@@ -490,18 +514,18 @@ func (a *Adapter) forwardLiteChatCompletion(ctx context.Context, request provide
 	if format != "url" && format != "b64_json" {
 		return invalidImageRequest("image_config.response_format 必须是 url 或 b64_json")
 	}
-	responseID := newWebID("resp")
-	streaming := input.Stream || request.Streaming
-	if streaming {
-		reader, writer := io.Pipe()
-		streamCtx, cancel := context.WithCancel(ctx)
-		go a.streamLiteChatImages(streamCtx, writer, request.Credential, spec, responseID, input.Model, normalized.Prompt, count, format)
-		return &provider.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: streamHeaders(), Body: &cancelBody{ReadCloser: reader, cancel: cancel}, QuotaUnits: count}, nil
+	if spec.ProtocolModel != "imagine-lite" {
+		return a.forwardQualityImageChatCompletion(ctx, request, input, normalized, count, format)
 	}
+	responseID := newWebID("resp")
 	parsed := parsedChat{ResponseID: responseID, InputTokens: estimateTokens(normalized.Prompt)}
 	for range count {
 		rawURL, err := a.generateLiteImageURL(ctx, request.Credential, spec, normalized.Prompt)
 		if err != nil {
+			var mediaErr *webMediaUpstreamError
+			if errors.As(err, &mediaErr) && parsed.Text.Len() == 0 {
+				return mediaErr.providerResponse(), nil
+			}
 			var upstreamErr *liteUpstreamError
 			if errors.As(err, &upstreamErr) && parsed.Text.Len() == 0 {
 				return upstreamErr.Response(), nil
@@ -517,7 +541,14 @@ func (a *Adapter) forwardLiteChatCompletion(ctx context.Context, request provide
 		}
 		parsed.appendText(liteImageMarkdown(item))
 	}
-	payload := buildOpenAIResult("chat", responseID, input.Model, parsed, false)
+	if input.Stream || request.Streaming {
+		stream, err := buildImageCompatibilityStream(request.Operation, responseID, input.Model, &parsed)
+		if err != nil {
+			return nil, err
+		}
+		return &provider.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: streamHeaders(), Body: io.NopCloser(bytes.NewReader(stream)), QuotaUnits: count}, nil
+	}
+	payload := buildOpenAIResult(request.Operation, responseID, input.Model, parsed, false)
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -525,33 +556,76 @@ func (a *Adapter) forwardLiteChatCompletion(ctx context.Context, request provide
 	return &provider.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: jsonHeaders(), Body: io.NopCloser(bytes.NewReader(data)), QuotaUnits: count}, nil
 }
 
-func (a *Adapter) streamLiteChatImages(ctx context.Context, writer *io.PipeWriter, credential account.Credential, spec ModelSpec, responseID, model, prompt string, count int, format string) {
-	parsed := parsedChat{ResponseID: responseID, InputTokens: estimateTokens(prompt)}
-	writeStreamStart(writer, "chat", responseID, model, parsed.InputTokens)
-	for range count {
-		rawURL, err := a.generateLiteImageURL(ctx, credential, spec, prompt)
-		if err != nil {
-			_ = writer.CloseWithError(err)
-			return
-		}
-		item, err := a.imageDataItem(ctx, credential, imagineImageValue{URL: rawURL}, format)
-		if err != nil {
-			_ = writer.CloseWithError(err)
-			return
-		}
-		delta := liteImageMarkdown(item)
-		if parsed.Text.Len() > 0 {
-			delta = "\n\n" + delta
-		}
-		parsed.appendText(delta)
-		if err := writeStreamDelta(writer, "chat", responseID, model, "text", delta); err != nil {
-			_ = writer.CloseWithError(err)
-			return
-		}
+func (a *Adapter) forwardQualityImageChatCompletion(ctx context.Context, request provider.ResponseResourceRequest, input openAIRequest, normalized normalizedChatInput, count int, format string) (*provider.Response, error) {
+	aspectRatio := ""
+	resolution := ""
+	if input.ImageConfig != nil {
+		aspectRatio = input.ImageConfig.AspectRatio
+		resolution = input.ImageConfig.Resolution
 	}
-	payload := buildOpenAIResult("chat", responseID, model, parsed, false)
-	writeStreamDone(writer, "chat", responseID, model, parsed, payload)
-	_ = writer.Close()
+	generated, err := a.GenerateImage(ctx, provider.ImageGenerationRequest{
+		Credential: request.Credential, Model: request.Model, Prompt: normalized.Prompt,
+		Count: count, AspectRatio: aspectRatio, Resolution: resolution, ResponseFormat: format,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if generated.StatusCode < http.StatusOK || generated.StatusCode >= http.StatusMultipleChoices {
+		return generated, nil
+	}
+	defer generated.Body.Close()
+	var payload struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.NewDecoder(generated.Body).Decode(&payload); err != nil {
+		return nil, provider.NewMediaPostProcessingError(provider.MediaPostProcessingStorage, fmt.Errorf("图片生成兼容响应解析失败: %w", err))
+	}
+	parsed := parsedChat{ResponseID: newWebID("resp"), InputTokens: estimateTokens(normalized.Prompt)}
+	for _, item := range payload.Data {
+		markdown := liteImageMarkdown(item)
+		if markdown == "" {
+			continue
+		}
+		if parsed.Text.Len() > 0 {
+			parsed.appendText("\n\n")
+		}
+		parsed.appendText(markdown)
+	}
+	if parsed.Text.Len() == 0 {
+		return nil, fmt.Errorf("图片生成兼容响应中没有图片")
+	}
+	if input.Stream || request.Streaming {
+		stream, err := buildImageCompatibilityStream(request.Operation, parsed.ResponseID, input.Model, &parsed)
+		if err != nil {
+			return nil, err
+		}
+		return &provider.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: streamHeaders(), Body: io.NopCloser(bytes.NewReader(stream)), QuotaUnits: generated.QuotaUnits}, nil
+	}
+	result := buildOpenAIResult(request.Operation, parsed.ResponseID, input.Model, parsed, false)
+	data, err := json.Marshal(result)
+	if err != nil {
+		return nil, err
+	}
+	return &provider.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: jsonHeaders(), Body: io.NopCloser(bytes.NewReader(data)), QuotaUnits: generated.QuotaUnits}, nil
+}
+
+func buildImageCompatibilityStream(operation, responseID, model string, parsed *parsedChat) ([]byte, error) {
+	var stream bytes.Buffer
+	writeStreamStart(&stream, operation, responseID, model, parsed.InputTokens)
+	if operation == conversation.OperationResponses {
+		responsesStream := newWebResponsesStream(&stream, responseID)
+		if err := responsesStream.Delta("text", parsed.Text.String()); err != nil {
+			return nil, err
+		}
+		if err := responsesStream.Finish(parsed); err != nil {
+			return nil, err
+		}
+	} else if err := writeStreamDelta(&stream, operation, responseID, model, "text", parsed.Text.String()); err != nil {
+		return nil, err
+	}
+	payload := buildOpenAIResult(operation, responseID, model, *parsed, false)
+	writeStreamDone(&stream, operation, responseID, model, *parsed, payload)
+	return stream.Bytes(), nil
 }
 
 func liteImageMarkdown(item map[string]any) string {
@@ -569,6 +643,24 @@ func liteImageMarkdown(item map[string]any) string {
 }
 
 func (a *Adapter) generateWSImage(ctx context.Context, request provider.ImageGenerationRequest, count int, format, ratio, resolution string, modelConfig imagineModelConfig) (*provider.Response, error) {
+	for attempt := 0; attempt < 2; attempt++ {
+		response, err := a.generateWSImageAttempt(ctx, request, count, format, ratio, resolution, modelConfig)
+		if err == nil {
+			return response, nil
+		}
+		var upstreamErr *webMediaUpstreamError
+		if !errors.As(err, &upstreamErr) || !isClearanceRefreshableMediaError(upstreamErr) || attempt > 0 {
+			if errors.As(err, &upstreamErr) {
+				return upstreamErr.providerResponse(), nil
+			}
+			return nil, err
+		}
+		a.log().Warn("web_image_clearance_retry", "operation", "imagine", "status", upstreamErr.status, "body_kind", upstreamErr.bodyKind)
+	}
+	return nil, fmt.Errorf("Imagine WebSocket Clearance 重试耗尽")
+}
+
+func (a *Adapter) generateWSImageAttempt(ctx context.Context, request provider.ImageGenerationRequest, count int, format, ratio, resolution string, modelConfig imagineModelConfig) (*provider.Response, error) {
 	cfg := a.config()
 	token, err := a.cipher.Decrypt(request.Credential.EncryptedAccessToken)
 	if err != nil {
@@ -595,13 +687,32 @@ func (a *Adapter) generateWSImage(ctx context.Context, request provider.ImageGen
 	headers.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
 	headers.Set("Cache-Control", "no-cache")
 	headers.Set("Pragma", "no-cache")
-	connection, response, err := lease.DialWebSocket(ctx, wsURL, headers, 30*time.Second)
+	connection, response, err := lease.DialWebSocketDeferredForbidden(ctx, wsURL, headers, 30*time.Second)
 	if err != nil {
-		status := 0
 		if response != nil {
-			status = response.StatusCode
+			var body []byte
+			if response.Body != nil {
+				body, _ = io.ReadAll(io.LimitReader(response.Body, webMediaDiagnosticBodyLimit+1))
+				_ = response.Body.Close()
+			}
+			truncated := len(body) > webMediaDiagnosticBodyLimit
+			if truncated {
+				body = body[:webMediaDiagnosticBodyLimit]
+			}
+			upstreamErr := newWebMediaUpstreamError(response.StatusCode, body, truncated)
+			if isClearanceRefreshableMediaError(upstreamErr) {
+				lease.InvalidateClearance()
+			}
+			a.logWebMediaUpstreamRejection("image_imagine_handshake", &http.Response{
+				StatusCode: response.StatusCode,
+				Header:     http.Header(response.Header).Clone(),
+			}, upstreamErr)
+			if response.StatusCode != http.StatusForbidden {
+				a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, response.StatusCode, err)
+			}
+			return nil, upstreamErr
 		}
-		a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, status, err)
+		a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, 0, err)
 		return nil, fmt.Errorf("连接 Imagine WebSocket: %w", err)
 	}
 	connectionOwned := true
@@ -677,7 +788,28 @@ func (a *Adapter) generateWSImage(ctx context.Context, request provider.ImageGen
 	return result, err
 }
 
+// EditImage retries the complete browser media flow once after a challenge
+// response. Reacquiring the lease is required because the failed lease keeps
+// the immutable browser-session cookies that were rejected upstream.
 func (a *Adapter) EditImage(ctx context.Context, request provider.ImageEditRequest) (*provider.Response, error) {
+	for attempt := 0; attempt < 2; attempt++ {
+		response, err := a.editImageAttempt(ctx, request)
+		if err == nil {
+			return response, nil
+		}
+		var upstreamErr *webMediaUpstreamError
+		if !errors.As(err, &upstreamErr) || !isClearanceRefreshableMediaError(upstreamErr) || attempt > 0 {
+			if errors.As(err, &upstreamErr) {
+				return upstreamErr.providerResponse(), nil
+			}
+			return nil, err
+		}
+		a.log().Warn("web_image_clearance_retry", "operation", "edit", "status", upstreamErr.status, "body_kind", upstreamErr.bodyKind)
+	}
+	return nil, fmt.Errorf("图片编辑 Clearance 重试耗尽")
+}
+
+func (a *Adapter) editImageAttempt(ctx context.Context, request provider.ImageEditRequest) (*provider.Response, error) {
 	if strings.TrimSpace(request.Quality) != "" {
 		return invalidImageRequest("Grok Web 图片模型不支持 quality")
 	}
@@ -763,9 +895,15 @@ func (a *Adapter) EditImage(ctx context.Context, request provider.ImageEditReque
 		return nil, err
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+		body, _ := io.ReadAll(io.LimitReader(response.Body, webMediaDiagnosticBodyLimit+1))
 		_ = response.Body.Close()
-		return &provider.Response{StatusCode: response.StatusCode, Status: response.Status, Header: jsonHeaders(), Body: io.NopCloser(bytes.NewReader(body))}, nil
+		truncated := len(body) > webMediaDiagnosticBodyLimit
+		if truncated {
+			body = body[:webMediaDiagnosticBodyLimit]
+		}
+		upstreamErr := newWebMediaUpstreamError(response.StatusCode, body, truncated)
+		a.logWebMediaUpstreamRejection("image_edit_generate", response, upstreamErr)
+		return nil, upstreamErr
 	}
 	if request.Streaming {
 		reader, writer := io.Pipe()
@@ -1157,7 +1295,7 @@ func (a *Adapter) uploadFileV2Direct(ctx context.Context, cfg Config, lease *egr
 	request.Header = buildHeaders(token, lease, contentType)
 	request.Header.Del("x-xai-request-id")
 	applyAppHeaders(request.Header, cfg.BaseURL, referer)
-	response, err := lease.Do(request)
+	response, err := lease.DoDeferredForbidden(request)
 	if err != nil {
 		return uploadedFile{}, err
 	}
@@ -1171,10 +1309,10 @@ func (a *Adapter) uploadFileV2Direct(ctx context.Context, cfg Config, lease *egr
 		if truncated {
 			responseBody = responseBody[:webMediaDiagnosticBodyLimit]
 		}
-		if response.StatusCode == http.StatusForbidden {
-			a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, response.StatusCode, nil)
-		}
 		upstreamErr := newWebMediaUpstreamError(response.StatusCode, responseBody, truncated)
+		if isClearanceRefreshableMediaError(upstreamErr) {
+			lease.InvalidateClearance()
+		}
 		a.logWebMediaUpstreamRejection(stage, response, upstreamErr)
 		return uploadedFile{}, upstreamErr
 	}
@@ -1362,18 +1500,36 @@ func (a *Adapter) postJSONWithReferer(ctx context.Context, cfg Config, lease *eg
 		request.Header = buildHeaders(token, lease, "application/json")
 		applyAppHeaders(request.Header, cfg.BaseURL, referer)
 		a.applySignedStatsig(requestCtx, request, token, lease)
-		response, err := lease.Do(request)
+		response, err := lease.DoDeferredForbidden(request)
 		if err != nil {
 			cancel()
 			return nil, err
 		}
 		if response.StatusCode == http.StatusForbidden {
-			if attempt == 0 && a.invalidateSignedStatsig(http.MethodPost, endpoint) {
-				_ = response.Body.Close()
-				cancel()
-				continue
+			body, readErr := io.ReadAll(io.LimitReader(response.Body, webMediaDiagnosticBodyLimit+1))
+			_ = response.Body.Close()
+			cancel()
+			if readErr != nil {
+				return nil, fmt.Errorf("读取 Grok Web 403 响应: %w", readErr)
 			}
-			a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, http.StatusForbidden, nil)
+			truncated := len(body) > webMediaDiagnosticBodyLimit
+			if truncated {
+				body = body[:webMediaDiagnosticBodyLimit]
+			}
+			upstreamErr := newWebMediaUpstreamError(response.StatusCode, body, truncated)
+			response.Body = io.NopCloser(bytes.NewReader(body))
+			response.ContentLength = int64(len(body))
+			if isClearanceRefreshableMediaError(upstreamErr) {
+				lease.InvalidateClearance()
+				_ = a.invalidateSignedStatsig(http.MethodPost, endpoint)
+				return response, nil
+			}
+			// Structured JSON responses are application policy decisions. They
+			// must not invalidate Clearance, affect egress health, or be replayed.
+			if upstreamErr.bodyKind == "json" || attempt > 0 || !a.invalidateSignedStatsig(http.MethodPost, endpoint) {
+				return response, nil
+			}
+			continue
 		}
 		response.Body = &cancelBody{ReadCloser: response.Body, cancel: cancel}
 		return response, nil
@@ -1687,7 +1843,14 @@ func imagineURL(baseURL string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	value.Scheme = "wss"
+	switch value.Scheme {
+	case "https":
+		value.Scheme = "wss"
+	case "http":
+		value.Scheme = "ws"
+	default:
+		return "", fmt.Errorf("Grok Web Base URL 协议无效")
+	}
 	value.Path = "/ws/imagine/listen"
 	value.RawQuery = ""
 	return value.String(), nil
