@@ -27,10 +27,10 @@ import (
 )
 
 const (
-	ConsoleGuardErrorCode        = "console_guard_degraded"
-	consoleGuardMaxAttempts      = 5
-	consoleGuardHoldTimeout      = 30 * time.Second
-	consoleGuardMinOutputTokens  = int64(8)
+	ConsoleGuardErrorCode         = "console_guard_degraded"
+	consoleGuardMaxAttempts       = 5
+	consoleGuardHoldTimeout       = 30 * time.Second
+	consoleGuardMinOutputTokens   = int64(8)
 	lastErrorConsoleGuardDisabled = "console_guard_degraded_disabled"
 )
 

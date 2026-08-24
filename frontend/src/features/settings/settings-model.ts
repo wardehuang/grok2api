@@ -175,6 +175,9 @@ export const settingsSchema = z.object({
     }),
     autoCleanIncludeDisabled: z.boolean(),
   }),
+  consoleGuard: z.object({
+    enabled: z.boolean(),
+  }),
 });
 
 export type SettingsForm = z.infer<typeof settingsSchema>;
@@ -220,6 +223,9 @@ export function toSettingsForm(config: SettingsConfigDTO): SettingsForm {
       autoCleanReauthMinAge: parseDuration(config.accounts.autoCleanReauthMinAge),
       autoCleanIncludeDisabled: config.accounts.autoCleanIncludeDisabled,
     },
+    consoleGuard: {
+      enabled: config.consoleGuard.enabled,
+    },
   };
 }
 
@@ -262,6 +268,9 @@ export function toSettingsDTO(config: SettingsForm): SettingsConfigDTO {
       autoCleanReauthInterval: formatDuration(config.accounts.autoCleanReauthInterval),
       autoCleanReauthMinAge: formatDuration(config.accounts.autoCleanReauthMinAge),
       autoCleanIncludeDisabled: config.accounts.autoCleanIncludeDisabled,
+    },
+    consoleGuard: {
+      enabled: config.consoleGuard.enabled,
     },
   };
 }

@@ -35,6 +35,9 @@ export type SettingsConfigDTO = {
     autoCleanReauthMinAge: string;
     autoCleanIncludeDisabled: boolean;
   };
+  consoleGuard: {
+    enabled: boolean;
+  };
 };
 
 export type ClearanceMode = "manual" | "flaresolverr" | "on_demand";
@@ -144,6 +147,10 @@ const settingsConfigValidator = hasShape({
     autoCleanReauthMinAge: isString,
     autoCleanIncludeDisabled: isBoolean,
   })),
+  // Older backends may omit consoleGuard; withSettingsDefaults supplies a safe local default.
+  consoleGuard: isOptional(hasShape({
+    enabled: isBoolean,
+  })),
 });
 const defaultAccountsConfig = (): SettingsConfigDTO["accounts"] => ({
   markBuildForbiddenReauth: false,
@@ -154,8 +161,12 @@ const defaultAccountsConfig = (): SettingsConfigDTO["accounts"] => ({
   autoCleanReauthMinAge: "1h",
   autoCleanIncludeDisabled: false,
 });
+const defaultConsoleGuardConfig = (): SettingsConfigDTO["consoleGuard"] => ({
+  enabled: false,
+});
 function withSettingsDefaults(snapshot: SettingsSnapshotDTO): SettingsSnapshotDTO {
   const accounts = snapshot.config.accounts ?? defaultAccountsConfig();
+  const consoleGuard = snapshot.config.consoleGuard ?? defaultConsoleGuardConfig();
   const segmentedSelector = snapshot.config.routing.segmentedSelector ?? { enabled: true, minCandidates: 3000, windowSize: 64 };
   return {
     ...snapshot,
@@ -191,6 +202,9 @@ function withSettingsDefaults(snapshot: SettingsSnapshotDTO): SettingsSnapshotDT
         autoCleanReauthInterval: accounts.autoCleanReauthInterval || "10m",
         autoCleanReauthMinAge: accounts.autoCleanReauthMinAge || "1h",
         autoCleanIncludeDisabled: accounts.autoCleanIncludeDisabled ?? false,
+      },
+      consoleGuard: {
+        enabled: consoleGuard.enabled ?? false,
       },
     },
   };

@@ -1045,5 +1045,8 @@ func applyAuditQuery(query *gorm.DB, search string, start, end time.Time, filter
 	case "nonStream":
 		query = query.Where("streaming = ?", false)
 	}
+	if value := strings.TrimSpace(filter.ErrorCode); value != "" {
+		query = query.Where("error_code = ?", value)
+	}
 	return query
 }

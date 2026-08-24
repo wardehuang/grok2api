@@ -139,6 +139,8 @@ type AuditListFilter struct {
 	Mode    string
 	Key     string
 	Account string
+	// ErrorCode 精确匹配 error_code；用于按守护事件类型筛选审计。
+	ErrorCode string
 }
 
 type AuditCursorQuery struct {

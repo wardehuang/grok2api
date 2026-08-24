@@ -32,6 +32,7 @@ type settingsConfigDTO struct {
 	Audit             auditConfigDTO             `json:"audit"`
 	ClientKeyDefaults clientKeyDefaultsConfigDTO `json:"clientKeyDefaults"`
 	Accounts          *accountsConfigDTO         `json:"accounts,omitempty"`
+	ConsoleGuard      *consoleGuardConfigDTO     `json:"consoleGuard,omitempty"`
 }
 
 type serverConfigDTO struct {
@@ -135,6 +136,10 @@ type accountsConfigDTO struct {
 	AutoCleanReauthInterval              string    `json:"autoCleanReauthInterval"`
 	AutoCleanReauthMinAge                string    `json:"autoCleanReauthMinAge"`
 	AutoCleanIncludeDisabled             bool      `json:"autoCleanIncludeDisabled"`
+}
+
+type consoleGuardConfigDTO struct {
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 type settingsResponse struct {
@@ -260,6 +265,10 @@ func (value settingsConfigDTO) toApplication() settingsapp.EditableConfig {
 		}
 		result.AccountsProvided = true
 	}
+	if value.ConsoleGuard != nil {
+		result.ConsoleGuard = settingsapp.ConsoleGuardConfig{Enabled: boolValue(value.ConsoleGuard.Enabled)}
+		result.ConsoleGuardProvided = value.ConsoleGuard.Enabled != nil
+	}
 	return result
 }
 
@@ -330,6 +339,7 @@ func newSettingsResponse(value settingsapp.Snapshot) settingsResponse {
 				AutoCleanReauthMinAge:                config.Accounts.AutoCleanReauthMinAge,
 				AutoCleanIncludeDisabled:             config.Accounts.AutoCleanIncludeDisabled,
 			},
+			ConsoleGuard: &consoleGuardConfigDTO{Enabled: boolPointer(config.ConsoleGuard.Enabled)},
 		},
 		RecommendedProviderBuild: providerBuildRecommendationDTO{
 			ClientVersion: value.RecommendedProviderBuild.ClientVersion,

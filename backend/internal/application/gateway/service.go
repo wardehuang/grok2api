@@ -1604,91 +1604,141 @@ attemptLoop:
 					discardFallback(true)
 				}
 				if !commit.KeepBody {
-						_ = response.Body.Close()
-						lease.Release()
-						break attemptLoop
-					}
+					_ = response.Body.Close()
+					lease.Release()
+					break attemptLoop
 				}
-				if consoleGuardEnabled {
-					consoleGuardAttempts++
-					replay, verdict, peekUsage, _, peekErr := peekConsoleGuardStream(ctx, response.Body, consoleGuardProtocolForOperation(operation), consoleGuardCfg)
-					if peekErr != nil {
-						if replay != nil {
-							_ = replay.Close()
+			}
+			if consoleGuardEnabled {
+				consoleGuardAttempts++
+				protocol := consoleGuardProtocolForOperation(operation)
+				replay, verdict, peekUsage, holdSignals, peekErr := peekConsoleGuardStream(ctx, response.Body, protocol, consoleGuardCfg)
+				if peekErr != nil {
+					if replay != nil {
+						_ = replay.Close()
+					} else {
+						_ = response.Body.Close()
+					}
+					lease.Release()
+					lastErr = peekErr
+					if isClientRequestCancel(ctx, peekErr) {
+						lastFailure = &UpstreamFailure{HTTPStatus: 499, Code: "request_canceled", PublicMessage: "请求已取消", AccountID: credential.ID, AccountName: credential.Name, Cause: firstError(ctx.Err(), peekErr)}
+						break
+					}
+					lastFailure = newTransportUpstreamFailure(peekErr, credential.ID, credential.Name)
+					if neterrorpkg.IsUpstreamStreamIdleTimeout(peekErr) || neterrorpkg.IsUpstreamStreamIdleTimeout(context.Cause(ctx)) || errors.Is(peekErr, errConsoleGuardEmptyStream) {
+						logPrefix := "console_guard_peek_idle"
+						if errors.Is(peekErr, errConsoleGuardEmptyStream) {
+							logPrefix = "console_guard_peek_empty"
+						}
+						writeCtx, writeCancel := context.WithTimeout(context.WithoutCancel(ctx), finalizationTimeout)
+						if markErr := s.selector.MarkFailureAfterSuccess(writeCtx, credential, http.StatusGatewayTimeout, qualityIdleAccountCooldown); markErr != nil {
+							s.logger.Warn(logPrefix+"_cooldown_failed", "request_id", input.RequestID, "account_id", credential.ID, "error", markErr)
 						} else {
-							_ = response.Body.Close()
+							s.logger.Warn(logPrefix+"_retry", "request_id", input.RequestID, "account_id", credential.ID, "cooldown", qualityIdleAccountCooldown)
 						}
-						lease.Release()
-						lastErr = peekErr
-						if isClientRequestCancel(ctx, peekErr) {
-							lastFailure = &UpstreamFailure{HTTPStatus: 499, Code: "request_canceled", PublicMessage: "请求已取消", AccountID: credential.ID, AccountName: credential.Name, Cause: firstError(ctx.Err(), peekErr)}
-							break
-						}
-						lastFailure = newTransportUpstreamFailure(peekErr, credential.ID, credential.Name)
-						if neterrorpkg.IsUpstreamStreamIdleTimeout(peekErr) || neterrorpkg.IsUpstreamStreamIdleTimeout(context.Cause(ctx)) || errors.Is(peekErr, errConsoleGuardEmptyStream) {
-							logPrefix := "console_guard_peek_idle"
-							if errors.Is(peekErr, errConsoleGuardEmptyStream) {
-								logPrefix = "console_guard_peek_empty"
-							}
-							writeCtx, writeCancel := context.WithTimeout(context.WithoutCancel(ctx), finalizationTimeout)
-							if markErr := s.selector.MarkFailureAfterSuccess(writeCtx, credential, http.StatusGatewayTimeout, qualityIdleAccountCooldown); markErr != nil {
-								s.logger.Warn(logPrefix+"_cooldown_failed", "request_id", input.RequestID, "account_id", credential.ID, "error", markErr)
-							} else {
-								s.logger.Warn(logPrefix+"_retry", "request_id", input.RequestID, "account_id", credential.ID, "cooldown", qualityIdleAccountCooldown)
-							}
-							writeCancel()
-						}
-						if shouldStopForNonAccountFingerprint(failureFingerprints, lastFailure) {
-							break
-						}
-						continue
+						writeCancel()
 					}
-					response.Body = replay
-					hasNextAccount := attemptPolicy.hasNext(attempt) && selection.hasAvailableCandidate(excluded, !quotaProbeAttempted)
-					hasNextAccount = hasNextAccount && consoleGuardAttempts < consoleGuardMaxAttempts
-					commit := CommitConsoleGuardHold(verdict, consoleGuardAttempts-1, consoleGuardMaxAttempts, hasNextAccount)
-					if verdict == ConsoleGuardWithhold {
-						s.disableConsoleGuardAccount(ctx, input.RequestID, credential)
+					if shouldStopForNonAccountFingerprint(failureFingerprints, lastFailure) {
+						break
 					}
-					if commit.Audit {
-						s.recordConsoleGuardDegraded(ctx, auditBase, credential, peekUsage, startedAt, egressTrace, route.Provider)
-						failureAttempts.captureQualityDegraded(credential, responseStartedAt)
-					}
-					switch commit.Action {
-					case ConsoleGuardActionRetry:
-						_ = response.Body.Close()
-						lease.Release()
-						lastErr = errQualityDegraded
-						lastFailure = &UpstreamFailure{
-							HTTPStatus: http.StatusServiceUnavailable, Code: ErrorQualityDegraded,
-							PublicMessage: "上游响应缺少推理", AccountID: credential.ID, AccountName: credential.Name,
-							Cause: errQualityDegraded,
-						}
-						s.logger.Info("console_guard_retry", "request_id", input.RequestID, "account_id", credential.ID, "guard_attempt", consoleGuardAttempts, "output_tokens", peekUsage.OutputTokens)
-						continue
-					case ConsoleGuardActionReject:
-						_ = response.Body.Close()
-						lease.Release()
-						lastErr = errQualityDegraded
-						lastFailure = &UpstreamFailure{
-							HTTPStatus: http.StatusServiceUnavailable, Code: ErrorQualityDegraded,
-							PublicMessage: "上游响应缺少推理", AccountID: credential.ID, AccountName: credential.Name,
-							Cause: errQualityDegraded,
-						}
-						s.logger.Info("console_guard_rejected", "request_id", input.RequestID, "account_id", credential.ID)
-						break attemptLoop
-					case ConsoleGuardActionDeliverLast:
-						discardFallback(true)
-						s.logger.Info("console_guard_deliver_last", "request_id", input.RequestID, "account_id", credential.ID, "guard_attempt", consoleGuardAttempts, "output_tokens", peekUsage.OutputTokens)
-					case ConsoleGuardActionDeliver:
-						discardFallback(true)
-					}
-					if !commit.KeepBody {
-						_ = response.Body.Close()
-						lease.Release()
-						break attemptLoop
-					}
+					continue
 				}
+				response.Body = replay
+				hasNextAccount := attemptPolicy.hasNext(attempt) && selection.hasAvailableCandidate(excluded, !quotaProbeAttempted)
+				hasNextAccount = hasNextAccount && consoleGuardAttempts < consoleGuardMaxAttempts
+				commit := CommitConsoleGuardHold(verdict, consoleGuardAttempts-1, consoleGuardMaxAttempts, hasNextAccount)
+				if verdict == ConsoleGuardWithhold {
+					s.disableConsoleGuardAccount(ctx, input.RequestID, credential)
+					s.logger.Warn("console_guard_withhold",
+						"request_id", input.RequestID,
+						"model", route.UpstreamModel,
+						"public_model", input.PublicModel,
+						"operation", string(operation),
+						"protocol", protocol,
+						"account_id", credential.ID,
+						"account_name", credential.Name,
+						"guard_attempt", consoleGuardAttempts,
+						"max_attempts", consoleGuardMaxAttempts,
+						"action", string(commit.Action),
+						"has_next_account", hasNextAccount,
+						"has_thinking", holdSignals.HasThinking,
+						"reasoning_started", holdSignals.ReasoningStarted,
+						"visible_tokens", holdSignals.VisibleTokens,
+						"reasoning_tokens", holdSignals.ReasoningTokens,
+						"output_tokens", holdSignals.OutputTokens,
+						"terminal", holdSignals.Terminal,
+						"usage_output_tokens", peekUsage.OutputTokens,
+						"usage_reasoning_tokens", peekUsage.ReasoningTokens,
+						"upstream_duration_ms", time.Since(responseStartedAt).Milliseconds(),
+					)
+				}
+				if commit.Audit {
+					s.recordConsoleGuardDegraded(ctx, auditBase, credential, peekUsage, startedAt, egressTrace, route.Provider)
+					failureAttempts.captureQualityDegraded(credential, responseStartedAt)
+				}
+				switch commit.Action {
+				case ConsoleGuardActionRetry:
+					_ = response.Body.Close()
+					lease.Release()
+					lastErr = errQualityDegraded
+					lastFailure = &UpstreamFailure{
+						HTTPStatus: http.StatusServiceUnavailable, Code: ErrorQualityDegraded,
+						PublicMessage: "上游响应缺少推理", AccountID: credential.ID, AccountName: credential.Name,
+						Cause: errQualityDegraded,
+					}
+					s.logger.Warn("console_guard_retry",
+						"request_id", input.RequestID,
+						"model", route.UpstreamModel,
+						"public_model", input.PublicModel,
+						"operation", string(operation),
+						"protocol", protocol,
+						"account_id", credential.ID,
+						"account_name", credential.Name,
+						"guard_attempt", consoleGuardAttempts,
+						"max_attempts", consoleGuardMaxAttempts,
+						"output_tokens", peekUsage.OutputTokens,
+						"reasoning_tokens", peekUsage.ReasoningTokens,
+						"visible_tokens", holdSignals.VisibleTokens,
+						"upstream_duration_ms", time.Since(responseStartedAt).Milliseconds(),
+					)
+					continue
+				case ConsoleGuardActionReject:
+					_ = response.Body.Close()
+					lease.Release()
+					lastErr = errQualityDegraded
+					lastFailure = &UpstreamFailure{
+						HTTPStatus: http.StatusServiceUnavailable, Code: ErrorQualityDegraded,
+						PublicMessage: "上游响应缺少推理", AccountID: credential.ID, AccountName: credential.Name,
+						Cause: errQualityDegraded,
+					}
+					s.logger.Warn("console_guard_rejected",
+						"request_id", input.RequestID,
+						"model", route.UpstreamModel,
+						"public_model", input.PublicModel,
+						"operation", string(operation),
+						"protocol", protocol,
+						"account_id", credential.ID,
+						"account_name", credential.Name,
+						"guard_attempts_used", consoleGuardAttempts,
+						"max_attempts", consoleGuardMaxAttempts,
+						"last_account_id", credential.ID,
+						"last_output_tokens", peekUsage.OutputTokens,
+						"last_reasoning_tokens", peekUsage.ReasoningTokens,
+					)
+					break attemptLoop
+				case ConsoleGuardActionDeliverLast:
+					discardFallback(true)
+					s.logger.Info("console_guard_deliver_last", "request_id", input.RequestID, "account_id", credential.ID, "guard_attempt", consoleGuardAttempts, "output_tokens", peekUsage.OutputTokens)
+				case ConsoleGuardActionDeliver:
+					discardFallback(true)
+				}
+				if !commit.KeepBody {
+					_ = response.Body.Close()
+					lease.Release()
+					break attemptLoop
+				}
+			}
 			if diagnostic := response.RecoveredPrimaryFailure; diagnostic != nil {
 				recoveredFailure := newHTTPUpstreamFailure(diagnostic.StatusCode, diagnostic.Body, credential.ID, credential.Name)
 				if recoveredFailure.AccountBlocked || (credential.Provider == accountdomain.ProviderBuild && s.shouldInvalidateBuildForbidden(recoveredFailure)) {

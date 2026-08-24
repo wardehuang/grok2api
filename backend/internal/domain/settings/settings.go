@@ -30,6 +30,7 @@ type Config struct {
 	Audit             AuditConfig
 	ClientKeyDefaults ClientKeyDefaultsConfig
 	Accounts          AccountsConfig
+	ConsoleGuard      ConsoleGuardConfig
 }
 
 // ServerConfig 定义可热更新的推理入口容量参数。
@@ -149,4 +150,9 @@ type AccountsConfig struct {
 	AutoCleanReauthMinAge time.Duration
 	// AutoCleanIncludeDisabled 为 true 时，reauth 清理时包含 enabled=false 的账号。
 	AutoCleanIncludeDisabled bool
+}
+
+// ConsoleGuardConfig 定义 Console 账号降智防护开关；判定参数固定在网关代码里。
+type ConsoleGuardConfig struct {
+	Enabled bool
 }

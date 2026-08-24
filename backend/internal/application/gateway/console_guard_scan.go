@@ -278,14 +278,14 @@ func noteConsoleGuardReasoningItem(state *consoleGuardScanState, item consoleGua
 
 func observeConsoleGuardResponses(state *consoleGuardScanState, payload []byte) {
 	var event struct {
-		Type  string `json:"type"`
-		Delta string `json:"delta"`
-		Item  consoleGuardReasoningItem
+		Type     string `json:"type"`
+		Delta    string `json:"delta"`
+		Item     consoleGuardReasoningItem
 		Response *struct {
-			ID     string                 `json:"id"`
-			Model  string                 `json:"model"`
+			ID     string                      `json:"id"`
+			Model  string                      `json:"model"`
 			Output []consoleGuardReasoningItem `json:"output"`
-			Usage *struct {
+			Usage  *struct {
 				OutputTokens        int64 `json:"output_tokens"`
 				InputTokens         int64 `json:"input_tokens"`
 				TotalTokens         int64 `json:"total_tokens"`
@@ -384,10 +384,10 @@ func noteConsoleGuardVisibleContent(state *consoleGuardScanState, text string) {
 	state.visibleRunes += utf8.RuneCountInString(text)
 }
 
-func peekConsoleGuardStream(ctx context.Context, body io.ReadCloser, protocol string, cfg ConsoleGuardRuntime) (io.ReadCloser, ConsoleGuardVerdict, Usage, string, error) {
+func peekConsoleGuardStream(ctx context.Context, body io.ReadCloser, protocol string, cfg ConsoleGuardRuntime) (io.ReadCloser, ConsoleGuardVerdict, Usage, ConsoleGuardSignals, error) {
 	cfg = normalizeConsoleGuard(cfg)
 	if body == nil {
-		return io.NopCloser(bytes.NewReader(nil)), ConsoleGuardWait, Usage{}, "", errConsoleGuardEmptyStream
+		return io.NopCloser(bytes.NewReader(nil)), ConsoleGuardWait, Usage{}, ConsoleGuardSignals{}, errConsoleGuardEmptyStream
 	}
 	pump := newConsoleGuardReadPump(body)
 	state := consoleGuardScanState{protocol: protocol}
@@ -397,7 +397,7 @@ func peekConsoleGuardStream(ctx context.Context, body io.ReadCloser, protocol st
 	for {
 		sig := state.signals()
 		if verdict := ClassifyConsoleGuardHold(sig, cfg.MinOutputTokens); verdict != ConsoleGuardWait {
-			return newConsoleGuardPrefixReplay(&held, pump), verdict, state.usage, state.responseID, nil
+			return newConsoleGuardPrefixReplay(&held, pump), verdict, state.usage, sig, nil
 		}
 		// 已 terminal 的空流必须立即轮换：在 response.completed / [DONE] 之后
 		// 继续等 idle timeout 会把 HTTP 200 + 0 token 暴露给下游。
@@ -408,11 +408,11 @@ func peekConsoleGuardStream(ctx context.Context, body io.ReadCloser, protocol st
 		select {
 		case <-ctx.Done():
 			_ = pump.Close()
-			return io.NopCloser(bytes.NewReader(held.Bytes())), ConsoleGuardWait, state.usage, state.responseID, consoleGuardPeekAbortError(ctx, ctx.Err())
+			return io.NopCloser(bytes.NewReader(held.Bytes())), ConsoleGuardWait, state.usage, sig, consoleGuardPeekAbortError(ctx, ctx.Err())
 		case <-holdTimer.C:
 			sig.HoldExpired = true
 			if verdict := ClassifyConsoleGuardHold(sig, cfg.MinOutputTokens); verdict != ConsoleGuardWait {
-				return newConsoleGuardPrefixReplay(&held, pump), verdict, state.usage, state.responseID, nil
+				return newConsoleGuardPrefixReplay(&held, pump), verdict, state.usage, sig, nil
 			}
 		case result, ok := <-pump.results:
 			if !ok {
@@ -421,7 +421,7 @@ func peekConsoleGuardStream(ctx context.Context, body io.ReadCloser, protocol st
 			if len(result.data) > 0 {
 				if held.Len()+len(result.data) > consoleGuardMaxBufferBytes {
 					_, _ = held.Write(result.data)
-					return newConsoleGuardPrefixReplay(&held, pump), ConsoleGuardDeliver, state.usage, state.responseID, nil
+					return newConsoleGuardPrefixReplay(&held, pump), ConsoleGuardDeliver, state.usage, sig, nil
 				}
 				_, _ = held.Write(result.data)
 				ObserveConsoleGuardChunk(&state, result.data)
@@ -431,15 +431,15 @@ func peekConsoleGuardStream(ctx context.Context, body io.ReadCloser, protocol st
 			}
 			if result.err != nil {
 				_ = pump.Close()
-				return io.NopCloser(bytes.NewReader(held.Bytes())), ConsoleGuardWait, state.usage, state.responseID, consoleGuardPeekAbortError(ctx, result.err)
+				return io.NopCloser(bytes.NewReader(held.Bytes())), ConsoleGuardWait, state.usage, sig, consoleGuardPeekAbortError(ctx, result.err)
 			}
 		}
 	}
 }
 
-func finishConsoleGuardPeek(held *bytes.Buffer, pump *consoleGuardReadPump, state *consoleGuardScanState, cfg ConsoleGuardRuntime) (io.ReadCloser, ConsoleGuardVerdict, Usage, string, error) {
+func finishConsoleGuardPeek(held *bytes.Buffer, pump *consoleGuardReadPump, state *consoleGuardScanState, cfg ConsoleGuardRuntime) (io.ReadCloser, ConsoleGuardVerdict, Usage, ConsoleGuardSignals, error) {
 	if state == nil {
-		return io.NopCloser(bytes.NewReader(nil)), ConsoleGuardWait, Usage{}, "", errConsoleGuardEmptyStream
+		return io.NopCloser(bytes.NewReader(nil)), ConsoleGuardWait, Usage{}, ConsoleGuardSignals{}, errConsoleGuardEmptyStream
 	}
 	if len(state.pending) > 0 {
 		// 上游漏掉末尾换行时也要处理最后一条合法 SSE data 行。
@@ -448,9 +448,9 @@ func finishConsoleGuardPeek(held *bytes.Buffer, pump *consoleGuardReadPump, stat
 	state.terminal = true
 	signals := state.signals()
 	if !signals.HasThinking && signals.ReasoningTokens <= 0 && signals.OutputTokens <= 0 && signals.VisibleTokens <= 0 {
-		return newConsoleGuardPrefixReplay(held, pump), ConsoleGuardWait, state.usage, state.responseID, errConsoleGuardEmptyStream
+		return newConsoleGuardPrefixReplay(held, pump), ConsoleGuardWait, state.usage, signals, errConsoleGuardEmptyStream
 	}
-	return newConsoleGuardPrefixReplay(held, pump), ClassifyConsoleGuardHold(signals, cfg.MinOutputTokens), state.usage, state.responseID, nil
+	return newConsoleGuardPrefixReplay(held, pump), ClassifyConsoleGuardHold(signals, cfg.MinOutputTokens), state.usage, signals, nil
 }
 
 func newConsoleGuardPrefixReplay(held *bytes.Buffer, rest io.ReadCloser) io.ReadCloser {

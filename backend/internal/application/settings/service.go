@@ -149,6 +149,11 @@ type AccountsConfig struct {
 	ExcludeBuildBotFlaggedFromSchedulingProvided bool
 }
 
+// ConsoleGuardConfig 是管理接口使用的 Console 降智防护开关输入。
+type ConsoleGuardConfig struct {
+	Enabled bool
+}
+
 // EditableConfig 聚合管理端允许修改的运行参数。
 type EditableConfig struct {
 	Server            ServerConfig
@@ -162,6 +167,9 @@ type EditableConfig struct {
 	Audit             AuditConfig
 	ClientKeyDefaults ClientKeyDefaultsConfig
 	Accounts          AccountsConfig
+	ConsoleGuard      ConsoleGuardConfig
+	// ConsoleGuardProvided 区分旧管理端未发送 consoleGuard 与显式提交默认值。
+	ConsoleGuardProvided bool
 	// AccountsProvided 区分旧管理端未发送 accounts 与显式提交默认值。
 	AccountsProvided bool
 }
@@ -426,6 +434,8 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 		base.Accounts.BuildForbiddenReauthCodes = append([]string(nil), value.Accounts.BuildForbiddenReauthCodes...)
 	}
 	base.Accounts.ExcludeBuildBotFlaggedFromScheduling = value.Accounts.ExcludeBuildBotFlaggedFromScheduling
+	// ConsoleGuard 为后续新增段；旧持久化缺字段时沿用当前配置（含文件默认）。
+	base.ConsoleGuard.Enabled = base.ConsoleGuard.Enabled || value.ConsoleGuard.Enabled
 	return base
 }
 
@@ -495,6 +505,7 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 			AutoCleanReauthMinAge:                value.Accounts.AutoCleanReauthMinAge.Value(),
 			AutoCleanIncludeDisabled:             value.Accounts.AutoCleanIncludeDisabled,
 		},
+		ConsoleGuard: settingsdomain.ConsoleGuardConfig{Enabled: value.ConsoleGuard.Enabled},
 	}
 }
 
@@ -588,6 +599,9 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 		}
 		next.Accounts.AutoCleanReauthEnabled = input.Accounts.AutoCleanReauthEnabled
 		next.Accounts.AutoCleanIncludeDisabled = input.Accounts.AutoCleanIncludeDisabled
+	}
+	if input.ConsoleGuardProvided {
+		next.ConsoleGuard.Enabled = input.ConsoleGuard.Enabled
 	}
 
 	type durationInput struct {
@@ -725,7 +739,9 @@ func toEditable(cfg config.Config) EditableConfig {
 			AutoCleanReauthMinAge:                        cfg.Accounts.AutoCleanReauthMinAge.String(),
 			AutoCleanIncludeDisabled:                     cfg.Accounts.AutoCleanIncludeDisabled,
 		},
-		AccountsProvided: true,
+		ConsoleGuard:         ConsoleGuardConfig{Enabled: cfg.ConsoleGuard.Enabled},
+		ConsoleGuardProvided: true,
+		AccountsProvided:     true,
 	}
 }
 
