@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	auditdomain "github.com/chenyme/grok2api/backend/internal/domain/audit"
 	clientkeydomain "github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	settingsdomain "github.com/chenyme/grok2api/backend/internal/domain/settings"
 	"github.com/chenyme/grok2api/backend/internal/pkg/signerurl"
@@ -22,6 +23,8 @@ import (
 
 const (
 	DatabaseURLEnv                = "GROK2API_DATABASE_URL"
+	ConsoleSchedulingBalanced     = "balanced"
+	ConsoleSchedulingSequential   = "sequential"
 	StatsigModeManual             = "manual"
 	StatsigModeURL                = "url"
 	ClearanceModeManual           = "manual"
@@ -214,13 +217,14 @@ type LocalMediaConfig struct {
 }
 
 type RoutingConfig struct {
-	StickyTTL        Duration `yaml:"stickyTTL"`
-	CooldownBase     Duration `yaml:"cooldownBase"`
-	CooldownMax      Duration `yaml:"cooldownMax"`
-	CapacityWait     Duration `yaml:"capacityWait"`
-	MaxAttempts      int      `yaml:"maxAttempts"`
-	VideoMaxAttempts int      `yaml:"videoMaxAttempts"`
-	PreferFreeBuild  bool     `yaml:"preferFreeBuild"`
+	StickyTTL         Duration `yaml:"stickyTTL"`
+	CooldownBase      Duration `yaml:"cooldownBase"`
+	CooldownMax       Duration `yaml:"cooldownMax"`
+	CapacityWait      Duration `yaml:"capacityWait"`
+	MaxAttempts       int      `yaml:"maxAttempts"`
+	VideoMaxAttempts  int      `yaml:"videoMaxAttempts"`
+	PreferFreeBuild   bool     `yaml:"preferFreeBuild"`
+	ConsoleScheduling string   `yaml:"consoleScheduling"`
 	// MarkBuildChatDeniedAsReauth 为 true 时，Build chat 权限拒绝标 reauthRequired，默认 false。
 	MarkBuildChatDeniedAsReauth bool     `yaml:"markBuildChatDeniedAsReauth"`
 	AccountIsolatedConnections  bool     `yaml:"accountIsolatedConnections"`
@@ -297,10 +301,12 @@ type QualityGuardRequestRetryConfig struct {
 	AccountCooldown Duration `yaml:"accountCooldown"`
 }
 
-// ConsoleGuardConfig 是 Console 账号专用的降智防护开关。
-// 判定参数（30s hold、8 token 阈值、5 个账号、fail_closed、命中即停用）固定在代码里。
+// ConsoleGuardConfig 是 Console 账号专用的降智防护配置。
+// 判定参数（30s hold、5 个账号、fail_closed、命中即停用）固定在代码里；TPS 阈值可热更新。
 type ConsoleGuardConfig struct {
-	Enabled bool `yaml:"enabled"`
+	Enabled bool    `yaml:"enabled"`
+	SoftTPS float64 `yaml:"softTPS"`
+	HardTPS float64 `yaml:"hardTPS"`
 }
 
 type ClientKeyDefaultsConfig struct {
@@ -677,6 +683,9 @@ func (c Config) Validate() error {
 		c.Routing.SegmentedWindowSize > c.Routing.SegmentedMinCandidates {
 		return errors.New("routing segmented selector 配置无效")
 	}
+	if c.Routing.ConsoleScheduling != ConsoleSchedulingBalanced && c.Routing.ConsoleScheduling != ConsoleSchedulingSequential {
+		return errors.New("routing.consoleScheduling 必须是 balanced 或 sequential")
+	}
 	if c.Routing.ReasoningReplayTTL.Value() <= 0 || c.Routing.ReasoningReplayTTL.Value() > 24*time.Hour {
 		return errors.New("routing.reasoningReplayTTL 必须在 1 纳秒到 24 小时之间")
 	}
@@ -705,6 +714,9 @@ func (c Config) Validate() error {
 		return errors.New("audit.ledgerQueueHighWatermarkPercent 必须在 50 到 100 之间")
 	}
 	if err := validateQualityGuardConfig(c.QualityGuard); err != nil {
+		return err
+	}
+	if err := validateConsoleGuardConfig(c.ConsoleGuard); err != nil {
 		return err
 	}
 	if c.ClientKeyDefaults.RPMLimit < 1 || c.ClientKeyDefaults.RPMLimit > clientkeydomain.MaxRPMLimit || c.ClientKeyDefaults.MaxConcurrent < 1 || c.ClientKeyDefaults.MaxConcurrent > clientkeydomain.MaxConcurrent {
@@ -781,6 +793,13 @@ func validateQualityGuardConfig(value QualityGuardConfig) error {
 		if err != nil || parsed.Host == "" || parsed.User != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 			return errors.New("qualityGuard.rotationURL 必须是无凭据的 HTTP(S) URL")
 		}
+	}
+	return nil
+}
+
+func validateConsoleGuardConfig(value ConsoleGuardConfig) error {
+	if value.SoftTPS < 1 || value.HardTPS <= value.SoftTPS || value.HardTPS > 10000 {
+		return errors.New("consoleGuard TPS 阈值无效")
 	}
 	return nil
 }
@@ -917,6 +936,7 @@ func defaultConfig() Config {
 			VideoMaxAttempts:            999,
 			MarkBuildChatDeniedAsReauth: false,
 			PreferFreeBuild:             false,
+			ConsoleScheduling:           ConsoleSchedulingBalanced,
 			AccountIsolatedConnections:  false,
 			SegmentedSelectorEnabled:    true,
 			SegmentedMinCandidates:      3000,
@@ -941,6 +961,9 @@ func defaultConfig() Config {
 				MaxAttempts: 6, HoldTimeout: Duration(3 * time.Second), MinOutputTokens: 32, OnExhausted: "fail_closed",
 				AccountCooldown: Duration(24 * time.Hour),
 			},
+		},
+		ConsoleGuard: ConsoleGuardConfig{
+			SoftTPS: auditdomain.DefaultDegradeSoftTPS, HardTPS: auditdomain.DefaultDegradeHardTPS,
 		},
 		ClientKeyDefaults: ClientKeyDefaultsConfig{RPMLimit: clientkeydomain.DefaultRPMLimit, MaxConcurrent: clientkeydomain.DefaultMaxConcurrent},
 		Accounts: AccountsConfig{

@@ -20,7 +20,7 @@ export type SettingsConfigDTO = {
   };
   frontend: { publicApiBaseURL: string };
   routing: {
-    stickyTTL: string; cooldownBase: string; cooldownMax: string; capacityWait: string; maxAttempts: number; videoMaxAttempts: number; preferFreeBuild: boolean; markBuildChatDeniedAsReauth: boolean;
+    stickyTTL: string; cooldownBase: string; cooldownMax: string; capacityWait: string; maxAttempts: number; videoMaxAttempts: number; preferFreeBuild: boolean; consoleScheduling: "balanced" | "sequential"; markBuildChatDeniedAsReauth: boolean;
     accountIsolatedConnections: boolean;
     segmentedSelector: { enabled: boolean; minCandidates: number; windowSize: number };
   };
@@ -37,6 +37,8 @@ export type SettingsConfigDTO = {
   };
   consoleGuard: {
     enabled: boolean;
+    softTPS: number;
+    hardTPS: number;
   };
 };
 
@@ -131,7 +133,7 @@ const settingsConfigValidator = hasShape({
   media: hasShape({ maxImageBytes: isNumber, maxTotalBytes: isNumber, cleanupThresholdPercent: isNumber, cleanupInterval: isString }),
   frontend: hasShape({ publicApiBaseURL: isString }),
   routing: hasShape({
-    stickyTTL: isString, cooldownBase: isString, cooldownMax: isString, capacityWait: isString, maxAttempts: isNumber, videoMaxAttempts: isNumber, preferFreeBuild: isBoolean, markBuildChatDeniedAsReauth: isBoolean,
+    stickyTTL: isString, cooldownBase: isString, cooldownMax: isString, capacityWait: isString, maxAttempts: isNumber, videoMaxAttempts: isNumber, preferFreeBuild: isBoolean, consoleScheduling: isOptional(isOneOf("balanced", "sequential")), markBuildChatDeniedAsReauth: isBoolean,
     accountIsolatedConnections: isOptional(isBoolean),
     segmentedSelector: isOptional(hasShape({ enabled: isBoolean, minCandidates: isNumber, windowSize: isNumber })),
   }),
@@ -150,6 +152,8 @@ const settingsConfigValidator = hasShape({
   // Older backends may omit consoleGuard; withSettingsDefaults supplies a safe local default.
   consoleGuard: isOptional(hasShape({
     enabled: isBoolean,
+    softTPS: isOptional(isNumber),
+    hardTPS: isOptional(isNumber),
   })),
 });
 const defaultAccountsConfig = (): SettingsConfigDTO["accounts"] => ({
@@ -163,10 +167,12 @@ const defaultAccountsConfig = (): SettingsConfigDTO["accounts"] => ({
 });
 const defaultConsoleGuardConfig = (): SettingsConfigDTO["consoleGuard"] => ({
   enabled: false,
+  softTPS: 500,
+  hardTPS: 1000,
 });
 function withSettingsDefaults(snapshot: SettingsSnapshotDTO): SettingsSnapshotDTO {
   const accounts = snapshot.config.accounts ?? defaultAccountsConfig();
-  const consoleGuard = snapshot.config.consoleGuard ?? defaultConsoleGuardConfig();
+  const consoleGuard = { ...defaultConsoleGuardConfig(), ...(snapshot.config.consoleGuard ?? {}) };
   const segmentedSelector = snapshot.config.routing.segmentedSelector ?? { enabled: true, minCandidates: 3000, windowSize: 64 };
   return {
     ...snapshot,
@@ -186,6 +192,7 @@ function withSettingsDefaults(snapshot: SettingsSnapshotDTO): SettingsSnapshotDT
       },
       routing: {
         ...snapshot.config.routing,
+        consoleScheduling: snapshot.config.routing.consoleScheduling ?? "balanced",
         markBuildChatDeniedAsReauth: snapshot.config.routing.markBuildChatDeniedAsReauth ?? false,
         accountIsolatedConnections: snapshot.config.routing.accountIsolatedConnections ?? false,
         segmentedSelector: {
@@ -205,6 +212,8 @@ function withSettingsDefaults(snapshot: SettingsSnapshotDTO): SettingsSnapshotDT
       },
       consoleGuard: {
         enabled: consoleGuard.enabled ?? false,
+        softTPS: consoleGuard.softTPS ?? 500,
+        hardTPS: consoleGuard.hardTPS ?? 1000,
       },
     },
   };

@@ -3,6 +3,8 @@
 出口质量守护程序同时支持“真实请求审计被动检测”和“固定 Prompt 主动探测”。被动检测命中
 硬阈值会立即隔离节点；软阈值仍需固定 Prompt 主动复测确认。
 
+- Token/s 统一按 `(output_tokens + reasoning_tokens) * 1000 / (duration - first_token)` 计算。
+
 它是启发式熔断器，不是模型智力鉴定器。上游或中间层缓冲也可能造成瞬时数千
 Token/s，因此建议先观察 JSON 日志，再根据实际流量调整阈值。
 

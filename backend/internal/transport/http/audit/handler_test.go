@@ -96,7 +96,7 @@ func TestAuditResponseDerivesOutputThroughput(t *testing.T) {
 
 	lateFirst := int64(19763)
 	late := newAuditResponse(auditdomain.Record{StatusCode: http.StatusOK, Streaming: true, FirstTokenMS: &lateFirst, DurationMS: 19827, OutputTokens: 1511, ReasoningTokens: 1400})
-	if late.OutputTokensPerSecond == nil || *late.OutputTokensPerSecond != float64(1511)*1000/19827 {
+	if late.OutputTokensPerSecond == nil || *late.OutputTokensPerSecond != float64(1511+1400)*1000/64 {
 		t.Fatalf("late first-token throughput = %#v", late)
 	}
 	burstFirst := int64(10000)

@@ -340,6 +340,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	selector := gateway.NewSelector(accountRepo, concurrency, sticky, providers, cfg.Routing.StickyTTL.Value(), cfg.Routing.CooldownBase.Value(), cfg.Routing.CooldownMax.Value(), cfg.Routing.CapacityWait.Value())
 	selector.SetLogger(logger)
 	selector.UpdatePreferFreeBuild(cfg.Routing.PreferFreeBuild)
+	selector.UpdateConsoleScheduling(cfg.Routing.ConsoleScheduling)
 	selector.UpdateSegmentedSelector(cfg.Routing.SegmentedSelectorEnabled, cfg.Routing.SegmentedMinCandidates, cfg.Routing.SegmentedWindowSize)
 	selector.UpdateExcludeBuildBotFlaggedFromScheduling(cfg.Accounts.ExcludeBuildBotFlaggedFromScheduling)
 	accountService.UpdateExcludeBuildBotFlaggedFromScheduling(cfg.Accounts.ExcludeBuildBotFlaggedFromScheduling)
@@ -403,6 +404,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 		accountSyncService.UpdateConcurrency(next.Batch.ImportConcurrency)
 		selector.UpdateConfig(next.Routing.StickyTTL.Value(), next.Routing.CooldownBase.Value(), next.Routing.CooldownMax.Value(), next.Routing.CapacityWait.Value())
 		selector.UpdatePreferFreeBuild(next.Routing.PreferFreeBuild)
+		selector.UpdateConsoleScheduling(next.Routing.ConsoleScheduling)
 		selector.UpdateSegmentedSelector(next.Routing.SegmentedSelectorEnabled, next.Routing.SegmentedMinCandidates, next.Routing.SegmentedWindowSize)
 		egressService.ConfigureAutoAssignBounds(next.Routing.AutoAssignMaxNodeShare, next.Routing.AutoAssignMaxMigrationShare)
 		selector.UpdateExcludeBuildBotFlaggedFromScheduling(next.Accounts.ExcludeBuildBotFlaggedFromScheduling)
@@ -503,7 +505,7 @@ func qualityRetryRuntime(value config.QualityGuardRequestRetryConfig) gateway.Qu
 }
 
 func consoleGuardRuntime(value config.ConsoleGuardConfig) gateway.ConsoleGuardRuntime {
-	return gateway.ConsoleGuardRuntime{Enabled: value.Enabled}
+	return gateway.ConsoleGuardRuntime{Enabled: value.Enabled, SoftTPS: value.SoftTPS, HardTPS: value.HardTPS}
 }
 
 func auditLedgerConfig(value config.AuditConfig) auditapp.LedgerConfig {

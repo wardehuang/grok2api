@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { getRequestAudit, type AuditAttemptDTO, type AuditDTO } from "@/features/audits/request-audits-api";
+import { getRequestAudit, type AuditAttemptDTO, type AuditConsoleGuardDetailDTO, type AuditDTO } from "@/features/audits/request-audits-api";
 import { CopyButton } from "@/shared/components/copy-button";
 import { ErrorState, LoadingState } from "@/shared/components/data-state";
 import { cn } from "@/shared/lib/cn";
@@ -52,7 +52,9 @@ export function RequestAuditDetailDialog({ audit, open, onOpenChange }: { audit:
         {detailQuery.isPending ? <LoadingState className="min-h-0 flex-1" /> : null}
         {detailQuery.isError ? <ErrorState message={detailQuery.error.message} onRetry={() => void detailQuery.refetch()} /> : null}
         {detailQuery.data ? (
-          attempts.length > 0 && selectedAttempt ? (
+          detailQuery.data.audit.consoleGuard ? (
+            <ConsoleGuardDetail detail={detailQuery.data.audit.consoleGuard} />
+          ) : attempts.length > 0 && selectedAttempt ? (
             <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] lg:grid-cols-[190px_minmax(0,1fr)] lg:grid-rows-1">
               <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-muted/25 p-2.5">
                 <p className="mb-1 shrink-0 px-2 text-muted-foreground">{t("audits.attemptTimeline")}</p>
@@ -79,6 +81,78 @@ export function RequestAuditDetailDialog({ audit, open, onOpenChange }: { audit:
         ) : null}
       </DialogContent>
     </Dialog>
+  );
+}
+
+function ConsoleGuardDetail({ detail }: { detail: AuditConsoleGuardDetailDTO }) {
+  const { t, i18n } = useTranslation();
+  const metric = (value: number, suffix = "") => `${formatNumber(value, i18n.language)}${suffix}`;
+  const threshold = (value: number | undefined) => value === undefined ? "-" : metric(value, " token/s");
+  return (
+    <main className="min-h-0 flex-1 overflow-y-auto px-5 pb-5">
+      <div className="space-y-5 py-3">
+        <section className="rounded-md border border-amber-500/30 bg-amber-500/5 p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary" className="bg-amber-500/15 text-amber-700 dark:text-amber-300">{t("audits.consoleGuardTitle")}</Badge>
+            <Badge variant="outline">{t("audits.consoleGuardDecision")}: {detail.verdict}</Badge>
+            <Badge variant="outline">{t("audits.consoleGuardAction")}: {detail.action}</Badge>
+          </div>
+          <p className="mt-3 font-medium">{detail.hasThinking ? t("audits.consoleGuardThinkingDetected") : t("audits.consoleGuardThinkingMissing")}</p>
+          <EvidenceList title={t("audits.consoleGuardDecisionReasons")} items={detail.decisionReasons} />
+        </section>
+
+        <section>
+          <h3 className="mb-3 font-medium">{t("audits.consoleGuardMetrics")}</h3>
+          <div className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+            <OverviewField label={t("audits.consoleGuardProtocol")} value={detail.protocol || "-"} />
+            <OverviewField label={t("audits.consoleGuardAttempt")} value={`${detail.attempt} / ${detail.maxAttempts}`} />
+            <OverviewField label={t("audits.consoleGuardSoftTPS")} value={threshold(detail.softTPS)} />
+            <OverviewField label={t("audits.consoleGuardHardTPS")} value={threshold(detail.hardTPS)} />
+            <OverviewField label={t("audits.consoleGuardHoldTimeout")} value={metric(detail.holdTimeoutMs, " ms")} />
+            <OverviewField label={t("audits.consoleGuardVisibleRunes")} value={metric(detail.visibleRunes)} />
+            <OverviewField label={t("audits.consoleGuardVisibleTokens")} value={metric(detail.visibleTokens)} />
+            <OverviewField label={t("audits.consoleGuardEffectiveOutputTokens")} value={metric(detail.outputTokens)} />
+            <OverviewField label={t("audits.consoleGuardEffectiveReasoningTokens")} value={metric(detail.reasoningTokens)} />
+            <OverviewField label={t("audits.consoleGuardTPS")} value={`${detail.outputTokensPerSecond.toFixed(2)} token/s`} />
+            <OverviewField label={t("audits.consoleGuardObservationDuration")} value={metric(detail.observationDurationMs, " ms")} />
+            <OverviewField label={t("audits.consoleGuardUpstreamDuration")} value={metric(detail.upstreamDurationMs, " ms")} />
+            <OverviewField label={t("audits.consoleGuardGenerationWindow")} value={metric(detail.generationWindowMs, " ms")} />
+            <OverviewField label={t("audits.consoleGuardFirstVisible")} value={detail.firstVisibleObserved ? metric(detail.firstVisibleMs, " ms") : t("audits.consoleGuardNotObserved")} />
+            <OverviewField label={t("audits.consoleGuardTerminal")} value={`${detail.terminal ? t("audits.yes") : t("audits.no")} · ${detail.terminalEvent || "-"}`} />
+            <OverviewField label={t("audits.consoleGuardHoldExpired")} value={detail.holdExpired ? t("audits.yes") : t("audits.no")} />
+            <OverviewField label={t("audits.consoleGuardAccountDisabled")} value={detail.accountDisabled ? t("audits.yes") : t("audits.no")} />
+          </div>
+        </section>
+
+        <section>
+          <h3 className="mb-3 font-medium">{t("audits.consoleGuardUsage")}</h3>
+          <div className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
+            <OverviewField label={t("audits.consoleGuardUsageReported")} value={detail.usageReported ? t("audits.yes") : t("audits.no")} />
+            <OverviewField label={t("audits.consoleGuardUsageInputTokens")} value={metric(detail.usageInputTokens)} />
+            <OverviewField label={t("audits.consoleGuardUsageOutputTokens")} value={metric(detail.usageOutputTokens)} />
+            <OverviewField label={t("audits.consoleGuardUsageReasoningTokens")} value={metric(detail.usageReasoningTokens)} />
+            <OverviewField label={t("audits.consoleGuardUsageTotalTokens")} value={metric(detail.usageTotalTokens)} />
+            <OverviewField label={t("audits.consoleGuardReasoningStarted")} value={detail.reasoningStarted ? t("audits.yes") : t("audits.no")} />
+          </div>
+        </section>
+
+        <EvidenceList title={t("audits.consoleGuardThinkingEvidence")} items={detail.thinkingEvidence} emptyMessage={t("audits.consoleGuardNoEvidence")} />
+        <EvidenceList title={t("audits.consoleGuardStartEvidence")} items={detail.reasoningStartEvidence} emptyMessage={t("audits.consoleGuardNoEvidence")} />
+      </div>
+    </main>
+  );
+}
+
+function EvidenceList({ title, items, emptyMessage }: { title: string; items: Array<{ code: string; detail: string }>; emptyMessage?: string }) {
+  return (
+    <div className="mt-4">
+      <p className="text-muted-foreground">{title}</p>
+      {items.length === 0 ? <p className="mt-1 text-muted-foreground">{emptyMessage || "-"}</p> : (
+        <ul className="mt-2 space-y-2">
+          {items.map((item) => <li key={item.code} className="rounded-md bg-background/70 px-3 py-2"><span className="font-mono text-[11px]">{item.code}</span><span className="ml-2 text-muted-foreground">{item.detail}</span></li>)}
+        </ul>
+      )}
+    </div>
   );
 }
 

@@ -313,7 +313,18 @@ export function SettingsPage() {
                 }} />
               </SettingsField>
               <SettingsField controlId="routing-prefer-free-build" label={t("settings.routing.preferFreeBuild")} description={t("settings.routing.preferFreeBuildHelp")}><Controller control={form.control} name="routing.preferFreeBuild" render={({ field }) => <div className="flex h-9 items-center"><Switch id="routing-prefer-free-build" checked={field.value} onCheckedChange={field.onChange} /></div>} /></SettingsField>
-              <SettingsField controlId="routing-mark-build-chat-denied-as-reauth" label={t("settings.routing.markBuildChatDeniedAsReauth")} description={t("settings.routing.markBuildChatDeniedAsReauthHelp")}><Controller control={form.control} name="routing.markBuildChatDeniedAsReauth" render={({ field }) => <div className="flex h-9 items-center"><Switch id="routing-mark-build-chat-denied-as-reauth" checked={field.value} onCheckedChange={field.onChange} /></div>} /></SettingsField>
+              <SettingsField controlId="routing-console-scheduling" label={t("settings.routing.consoleScheduling")} description={t("settings.routing.consoleSchedulingHelp")} error={form.formState.errors.routing?.consoleScheduling?.message}>
+                <Controller control={form.control} name="routing.consoleScheduling" render={({ field }) => (
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <SelectTrigger id="routing-console-scheduling" className="w-full sm:w-56"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="balanced">{t("settings.routing.consoleSchedulingBalanced")}</SelectItem>
+                      <SelectItem value="sequential">{t("settings.routing.consoleSchedulingSequential")}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )} />
+              </SettingsField>
+              <SettingsField controlId="routing-mark-build-chat-denied-as-reauth" label={t("settings.routing.markBuildChatDeniedAsReauth")} description={t("settings.routing.markBuildChatDeniedAsReauthHelp")} error={form.formState.errors.routing?.markBuildChatDeniedAsReauth?.message}><Controller control={form.control} name="routing.markBuildChatDeniedAsReauth" render={({ field }) => <div className="flex h-9 items-center"><Switch id="routing-mark-build-chat-denied-as-reauth" checked={field.value} onCheckedChange={field.onChange} /></div>} /></SettingsField>
               <SettingsField controlId="routing-account-isolated-connections" label={t("settings.routing.accountIsolatedConnections")} description={t("settings.routing.accountIsolatedConnectionsHelp")}><Controller control={form.control} name="routing.accountIsolatedConnections" render={({ field }) => <div className="flex h-9 items-center"><Switch id="routing-account-isolated-connections" checked={field.value} onCheckedChange={field.onChange} /></div>} /></SettingsField>
               <SettingsField controlId="routing-segmented-selector-enabled" label={t("settingsRoutingSegmented.enabled")} description={t("settingsRoutingSegmented.enabledHelp")}><Controller control={form.control} name="routing.segmentedSelector.enabled" render={({ field }) => <div className="flex h-9 items-center"><Switch id="routing-segmented-selector-enabled" checked={field.value} onCheckedChange={field.onChange} /></div>} /></SettingsField>
               <SettingsField controlId="routing-segmented-min-candidates" label={t("settingsRoutingSegmented.minCandidates")} description={t("settingsRoutingSegmented.minCandidatesHelp")} error={form.formState.errors.routing?.segmentedSelector?.minCandidates?.message}><Input id="routing-segmented-min-candidates" type="number" min={100} max={1_000_000} disabled={!segmentedSelectorEnabled} {...form.register("routing.segmentedSelector.minCandidates", { valueAsNumber: true })} /></SettingsField>

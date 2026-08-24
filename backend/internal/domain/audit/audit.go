@@ -39,6 +39,52 @@ type ErrorFrame struct {
 	Message string
 }
 
+// ConsoleGuardEvidence 是 Console 降智判定使用的结构化证据。
+// Code 供前端稳定翻译；Detail 保留本次流的具体观察结果。
+type ConsoleGuardEvidence struct {
+	Code   string `json:"code"`
+	Detail string `json:"detail"`
+}
+
+// ConsoleGuardDetail 保存一次 Console 降智事件的完整判定快照。
+// 不保存请求正文或响应正文，只保存流扫描器的统计与判定证据。
+type ConsoleGuardDetail struct {
+	Protocol    string  `json:"protocol"`
+	Verdict     string  `json:"verdict"`
+	Action      string  `json:"action"`
+	Attempt     int     `json:"attempt"`
+	MaxAttempts int     `json:"maxAttempts"`
+	SoftTPS     float64 `json:"softTPS"`
+	HardTPS     float64 `json:"hardTPS"`
+	// MinOutputTokens 保留旧审计快照兼容；Console Guard 新判定不再使用它。
+	MinOutputTokens        int64                  `json:"minOutputTokens"`
+	HoldTimeoutMS          int64                  `json:"holdTimeoutMs"`
+	HasThinking            bool                   `json:"hasThinking"`
+	ThinkingEvidence       []ConsoleGuardEvidence `json:"thinkingEvidence"`
+	ReasoningStarted       bool                   `json:"reasoningStarted"`
+	ReasoningStartEvidence []ConsoleGuardEvidence `json:"reasoningStartEvidence"`
+	VisibleRunes           int64                  `json:"visibleRunes"`
+	VisibleTokens          int64                  `json:"visibleTokens"`
+	OutputTokens           int64                  `json:"outputTokens"`
+	ReasoningTokens        int64                  `json:"reasoningTokens"`
+	UsageReported          bool                   `json:"usageReported"`
+	UsageInputTokens       int64                  `json:"usageInputTokens"`
+	UsageOutputTokens      int64                  `json:"usageOutputTokens"`
+	UsageReasoningTokens   int64                  `json:"usageReasoningTokens"`
+	UsageTotalTokens       int64                  `json:"usageTotalTokens"`
+	Terminal               bool                   `json:"terminal"`
+	TerminalEvent          string                 `json:"terminalEvent"`
+	HoldExpired            bool                   `json:"holdExpired"`
+	ObservationDurationMS  int64                  `json:"observationDurationMs"`
+	UpstreamDurationMS     int64                  `json:"upstreamDurationMs"`
+	FirstVisibleObserved   bool                   `json:"firstVisibleObserved"`
+	FirstVisibleMS         int64                  `json:"firstVisibleMs"`
+	GenerationWindowMS     int64                  `json:"generationWindowMs"`
+	OutputTokensPerSecond  float64                `json:"outputTokensPerSecond"`
+	AccountDisabled        bool                   `json:"accountDisabled"`
+	DecisionReasons        []ConsoleGuardEvidence `json:"decisionReasons"`
+}
+
 // Attempt 保存一次失败尝试经过裁剪和脱敏的管理员诊断快照。
 type Attempt struct {
 	ID                    uint64
@@ -113,6 +159,7 @@ type Record struct {
 	ErrorCode               string
 	AttemptCount            int
 	Attempts                []Attempt
+	ConsoleGuard            *ConsoleGuardDetail
 	CreatedAt               time.Time
 }
 

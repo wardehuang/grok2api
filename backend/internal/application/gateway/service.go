@@ -1663,18 +1663,35 @@ attemptLoop:
 						"action", string(commit.Action),
 						"has_next_account", hasNextAccount,
 						"has_thinking", holdSignals.HasThinking,
+						"thinking_evidence", holdSignals.ThinkingEvidence,
 						"reasoning_started", holdSignals.ReasoningStarted,
+						"reasoning_start_evidence", holdSignals.ReasoningStartEvidence,
+						"visible_runes", holdSignals.VisibleRunes,
 						"visible_tokens", holdSignals.VisibleTokens,
 						"reasoning_tokens", holdSignals.ReasoningTokens,
 						"output_tokens", holdSignals.OutputTokens,
+						"soft_tps", consoleGuardCfg.SoftTPS,
+						"hard_tps", consoleGuardCfg.HardTPS,
+						"hold_timeout_ms", consoleGuardCfg.HoldTimeout.Milliseconds(),
 						"terminal", holdSignals.Terminal,
+						"terminal_event", holdSignals.TerminalEvent,
+						"hold_expired", holdSignals.HoldExpired,
+						"observation_duration_ms", holdSignals.ObservationDurationMS,
+						"first_visible_observed", holdSignals.FirstVisibleObserved,
+						"first_visible_ms", holdSignals.FirstVisibleMS,
+						"generation_window_ms", consoleGuardGenerationWindowMS(holdSignals),
+						"output_tokens_per_second", consoleGuardOutputTokensPerSecond(holdSignals, peekUsage),
+						"decision_reasons", buildConsoleGuardDetail(protocol, holdSignals, peekUsage, consoleGuardCfg, commit, consoleGuardAttempts, time.Since(responseStartedAt).Milliseconds()).DecisionReasons,
+						"usage_reported", peekUsage.Reported,
+						"usage_input_tokens", peekUsage.InputTokens,
 						"usage_output_tokens", peekUsage.OutputTokens,
 						"usage_reasoning_tokens", peekUsage.ReasoningTokens,
+						"usage_total_tokens", peekUsage.TotalTokens,
 						"upstream_duration_ms", time.Since(responseStartedAt).Milliseconds(),
 					)
 				}
 				if commit.Audit {
-					s.recordConsoleGuardDegraded(ctx, auditBase, credential, peekUsage, startedAt, egressTrace, route.Provider)
+					s.recordConsoleGuardDegraded(ctx, auditBase, credential, protocol, peekUsage, holdSignals, consoleGuardCfg, commit, consoleGuardAttempts, startedAt, responseStartedAt, egressTrace, route.Provider)
 					failureAttempts.captureQualityDegraded(credential, responseStartedAt)
 				}
 				switch commit.Action {

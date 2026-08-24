@@ -33,16 +33,22 @@ const (
 )
 
 type consoleGuardScanState struct {
-	protocol         string
-	pending          []byte
-	hasThinking      bool
-	reasoningStarted bool
-	visibleRunes     int
-	reasoningTokens  int64
-	outputTokens     int64
-	usage            Usage
-	responseID       string
-	terminal         bool
+	protocol               string
+	pending                []byte
+	hasThinking            bool
+	reasoningStarted       bool
+	visibleRunes           int
+	reasoningTokens        int64
+	outputTokens           int64
+	usage                  Usage
+	responseID             string
+	terminal               bool
+	terminalEvent          string
+	thinkingEvidence       []audit.ConsoleGuardEvidence
+	reasoningStartEvidence []audit.ConsoleGuardEvidence
+	startedAt              time.Time
+	firstVisibleObserved   bool
+	firstVisibleMS         int64
 }
 
 type consoleGuardReadResult struct {
@@ -147,15 +153,42 @@ func (s *consoleGuardScanState) signals() ConsoleGuardSignals {
 	if s.usage.Reported && s.usage.OutputTokens > output {
 		output = s.usage.OutputTokens
 	}
+	observationDurationMS := int64(0)
+	if !s.startedAt.IsZero() {
+		observationDurationMS = max(0, time.Since(s.startedAt).Milliseconds())
+	}
 	// Usage.reasoning_tokens 不是思考证据：降智账号在 completed 里虚报几百
 	// reasoning token，但流里从未发过 reasoning_text / summary delta。
 	return ConsoleGuardSignals{
-		HasThinking:      s.hasThinking,
-		ReasoningStarted: s.reasoningStarted || s.hasThinking,
-		VisibleTokens:    visible,
-		ReasoningTokens:  max(s.reasoningTokens, s.usage.ReasoningTokens),
-		OutputTokens:     output,
-		Terminal:         s.terminal,
+		HasThinking:            s.hasThinking,
+		ReasoningStarted:       s.reasoningStarted || s.hasThinking,
+		VisibleTokens:          visible,
+		ReasoningTokens:        max(s.reasoningTokens, s.usage.ReasoningTokens),
+		OutputTokens:           output,
+		Terminal:               s.terminal,
+		ThinkingEvidence:       append([]audit.ConsoleGuardEvidence(nil), s.thinkingEvidence...),
+		ReasoningStartEvidence: append([]audit.ConsoleGuardEvidence(nil), s.reasoningStartEvidence...),
+		TerminalEvent:          s.terminalEvent,
+		VisibleRunes:           int64(s.visibleRunes),
+		ObservationDurationMS:  observationDurationMS,
+		FirstVisibleObserved:   s.firstVisibleObserved,
+		FirstVisibleMS:         s.firstVisibleMS,
+	}
+}
+
+func appendConsoleGuardEvidence(target *[]audit.ConsoleGuardEvidence, code, detail string) {
+	for _, existing := range *target {
+		if existing.Code == code {
+			return
+		}
+	}
+	*target = append(*target, audit.ConsoleGuardEvidence{Code: code, Detail: detail})
+}
+
+func setConsoleGuardTerminal(state *consoleGuardScanState, event string) {
+	state.terminal = true
+	if state.terminalEvent == "" {
+		state.terminalEvent = event
 	}
 }
 
@@ -181,6 +214,7 @@ func ObserveConsoleGuardChunk(state *consoleGuardScanState, chunk []byte) {
 		if bytes.Equal(line, []byte(consoleGuardReasoningSSEComment)) {
 			// 计时 stub。降智流同样会发这个 stub，随后 reasoning_tokens=0 或虚报。
 			state.reasoningStarted = true
+			appendConsoleGuardEvidence(&state.reasoningStartEvidence, "sse.reasoning_start_stub", "观察到 Console reasoning 起始注释，但没有真实 reasoning 文本")
 			continue
 		}
 		if !bytes.HasPrefix(line, []byte("data:")) {
@@ -188,7 +222,7 @@ func ObserveConsoleGuardChunk(state *consoleGuardScanState, chunk []byte) {
 		}
 		payload := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
 		if bytes.Equal(payload, []byte("[DONE]")) {
-			state.terminal = true
+			setConsoleGuardTerminal(state, "sse.done")
 			continue
 		}
 		observeConsoleGuardPayload(state, payload)
@@ -246,14 +280,23 @@ func observeConsoleGuardChat(state *consoleGuardScanState, payload []byte) {
 	}
 	for _, choice := range event.Choices {
 		delta := choice.Delta
-		if delta.Reasoning != "" || delta.ReasoningContent != "" || delta.ThinkingContent != "" {
+		if delta.Reasoning != "" {
 			state.hasThinking = true
+			appendConsoleGuardEvidence(&state.thinkingEvidence, "chat.reasoning_delta", "delta.reasoning contains non-empty text")
+		}
+		if delta.ReasoningContent != "" {
+			state.hasThinking = true
+			appendConsoleGuardEvidence(&state.thinkingEvidence, "chat.reasoning_content_delta", "delta.reasoning_content contains non-empty text")
+		}
+		if delta.ThinkingContent != "" {
+			state.hasThinking = true
+			appendConsoleGuardEvidence(&state.thinkingEvidence, "chat.thinking_content_delta", "delta.thinking_content contains non-empty text")
 		}
 		if delta.Content != "" {
 			noteConsoleGuardVisibleContent(state, delta.Content)
 		}
 		if choice.FinishReason != "" {
-			state.terminal = true
+			setConsoleGuardTerminal(state, "chat.finish_reason:"+choice.FinishReason)
 		}
 	}
 }
@@ -270,9 +313,11 @@ func noteConsoleGuardReasoningItem(state *consoleGuardScanState, item consoleGua
 	}
 	if strings.TrimSpace(item.ID) != "" {
 		state.reasoningStarted = true
+		appendConsoleGuardEvidence(&state.reasoningStartEvidence, "responses.reasoning_item", "reasoning output item has a non-empty ID")
 	}
 	if strings.TrimSpace(item.EncryptedContent) != "" {
 		state.hasThinking = true
+		appendConsoleGuardEvidence(&state.thinkingEvidence, "responses.encrypted_content", "reasoning item has non-empty encrypted_content")
 	}
 }
 
@@ -300,10 +345,11 @@ func observeConsoleGuardResponses(state *consoleGuardScanState, payload []byte) 
 	}
 	switch event.Type {
 	case "response.completed", "response.incomplete", "response.failed":
-		state.terminal = true
+		setConsoleGuardTerminal(state, event.Type)
 	case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
 		if event.Delta != "" {
 			state.hasThinking = true
+			appendConsoleGuardEvidence(&state.thinkingEvidence, "responses."+event.Type, "reasoning event delta contains non-empty text")
 		}
 	case "response.output_item.added", "response.output_item.done":
 		noteConsoleGuardReasoningItem(state, event.Item)
@@ -355,14 +401,16 @@ func observeConsoleGuardAnthropic(state *consoleGuardScanState, payload []byte) 
 	}
 	switch event.Type {
 	case "message_stop":
-		state.terminal = true
+		setConsoleGuardTerminal(state, "anthropic.message_stop")
 	case "content_block_start":
 		if event.ContentBlock.Type == "thinking" {
 			state.reasoningStarted = true
+			appendConsoleGuardEvidence(&state.reasoningStartEvidence, "anthropic.thinking_block", "content block type is thinking")
 		}
 	case "content_block_delta":
 		if event.Delta.Type == "thinking_delta" && event.Delta.Thinking != "" {
 			state.hasThinking = true
+			appendConsoleGuardEvidence(&state.thinkingEvidence, "anthropic.thinking_delta", "thinking_delta contains non-empty text")
 		}
 		if event.Delta.Type == "text_delta" && event.Delta.Text != "" {
 			noteConsoleGuardVisibleContent(state, event.Delta.Text)
@@ -381,6 +429,12 @@ func noteConsoleGuardVisibleContent(state *consoleGuardScanState, text string) {
 	if text == "" {
 		return
 	}
+	if !state.firstVisibleObserved {
+		state.firstVisibleObserved = true
+		if !state.startedAt.IsZero() {
+			state.firstVisibleMS = max(0, time.Since(state.startedAt).Milliseconds())
+		}
+	}
 	state.visibleRunes += utf8.RuneCountInString(text)
 }
 
@@ -390,13 +444,13 @@ func peekConsoleGuardStream(ctx context.Context, body io.ReadCloser, protocol st
 		return io.NopCloser(bytes.NewReader(nil)), ConsoleGuardWait, Usage{}, ConsoleGuardSignals{}, errConsoleGuardEmptyStream
 	}
 	pump := newConsoleGuardReadPump(body)
-	state := consoleGuardScanState{protocol: protocol}
+	state := consoleGuardScanState{protocol: protocol, startedAt: time.Now()}
 	var held bytes.Buffer
 	holdTimer := time.NewTimer(cfg.HoldTimeout)
 	defer holdTimer.Stop()
 	for {
 		sig := state.signals()
-		if verdict := ClassifyConsoleGuardHold(sig, cfg.MinOutputTokens); verdict != ConsoleGuardWait {
+		if verdict := ClassifyConsoleGuardHold(sig, cfg.SoftTPS, cfg.HardTPS); verdict != ConsoleGuardWait {
 			return newConsoleGuardPrefixReplay(&held, pump), verdict, state.usage, sig, nil
 		}
 		// 已 terminal 的空流必须立即轮换：在 response.completed / [DONE] 之后
@@ -411,7 +465,7 @@ func peekConsoleGuardStream(ctx context.Context, body io.ReadCloser, protocol st
 			return io.NopCloser(bytes.NewReader(held.Bytes())), ConsoleGuardWait, state.usage, sig, consoleGuardPeekAbortError(ctx, ctx.Err())
 		case <-holdTimer.C:
 			sig.HoldExpired = true
-			if verdict := ClassifyConsoleGuardHold(sig, cfg.MinOutputTokens); verdict != ConsoleGuardWait {
+			if verdict := ClassifyConsoleGuardHold(sig, cfg.SoftTPS, cfg.HardTPS); verdict != ConsoleGuardWait {
 				return newConsoleGuardPrefixReplay(&held, pump), verdict, state.usage, sig, nil
 			}
 		case result, ok := <-pump.results:
@@ -445,12 +499,12 @@ func finishConsoleGuardPeek(held *bytes.Buffer, pump *consoleGuardReadPump, stat
 		// 上游漏掉末尾换行时也要处理最后一条合法 SSE data 行。
 		ObserveConsoleGuardChunk(state, []byte{'\n'})
 	}
-	state.terminal = true
+	setConsoleGuardTerminal(state, "stream.eof")
 	signals := state.signals()
 	if !signals.HasThinking && signals.ReasoningTokens <= 0 && signals.OutputTokens <= 0 && signals.VisibleTokens <= 0 {
 		return newConsoleGuardPrefixReplay(held, pump), ConsoleGuardWait, state.usage, signals, errConsoleGuardEmptyStream
 	}
-	return newConsoleGuardPrefixReplay(held, pump), ClassifyConsoleGuardHold(signals, cfg.MinOutputTokens), state.usage, signals, nil
+	return newConsoleGuardPrefixReplay(held, pump), ClassifyConsoleGuardHold(signals, cfg.SoftTPS, cfg.HardTPS), state.usage, signals, nil
 }
 
 func newConsoleGuardPrefixReplay(held *bytes.Buffer, rest io.ReadCloser) io.ReadCloser {

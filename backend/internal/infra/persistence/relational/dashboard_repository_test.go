@@ -228,8 +228,8 @@ func TestDashboardRepositoryUsesFullDurationOnlyWithReasoningEvidence(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Usage.ThroughputTokens != 3591 || snapshot.Usage.GenerationTotalMS != 19827+2000+100 {
-		t.Fatalf("short-tail generation window = %#v", snapshot.Usage)
+	if snapshot.Usage.ThroughputTokens != 4991 || snapshot.Usage.GenerationTotalMS != 64+2000+100 {
+		t.Fatalf("generation window or throughput tokens = %#v", snapshot.Usage)
 	}
 }
 

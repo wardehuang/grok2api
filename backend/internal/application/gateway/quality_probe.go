@@ -169,7 +169,7 @@ func (s *Service) ProbeEgressQuality(ctx context.Context, nodeID uint64, input e
 	completedAt := time.Now()
 	text := visible.String()
 	visibleCharacters := utf8.RuneCountInString(text)
-	// Visible tokens are diagnostic only; TPS intentionally uses total output tokens to match the audit panel.
+	// Visible tokens are diagnostic only; TPS uses output plus reasoning tokens to match the audit panel.
 	visibleTokens := usage.OutputTokens - usage.ReasoningTokens
 	if visibleTokens <= 0 && visibleCharacters > 0 {
 		visibleTokens = int64((visibleCharacters + 3) / 4)
@@ -181,7 +181,7 @@ func (s *Service) ProbeEgressQuality(ctx context.Context, nodeID uint64, input e
 	durationMS := completedAt.Sub(startedAt).Milliseconds()
 	var generationMS int64
 	if !firstGeneratedAt.IsZero() {
-		generationMS = audit.GenerationWindowMS(firstTokenMS, durationMS, usage.ReasoningTokens)
+		generationMS = audit.GenerationWindowMS(firstTokenMS, durationMS)
 		if generationMS < 1 {
 			generationMS = 1
 		}

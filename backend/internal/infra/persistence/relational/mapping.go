@@ -252,6 +252,13 @@ func toClientKeyDomain(value clientKeyModel, allowedModels []uint64) clientkey.K
 }
 
 func toAuditDomain(value requestAuditModel) audit.Record {
+	var consoleGuard *audit.ConsoleGuardDetail
+	if value.ConsoleGuardDetailJSON != "" {
+		var detail audit.ConsoleGuardDetail
+		if err := json.Unmarshal([]byte(value.ConsoleGuardDetailJSON), &detail); err == nil && detail.Protocol != "" {
+			consoleGuard = &detail
+		}
+	}
 	return audit.Record{
 		ID: value.ID, EventID: value.EventID, RequestID: value.RequestID, ClientKeyID: value.ClientKeyID, ClientKeyName: value.ClientKeyName, ClientIP: value.ClientIP,
 		ModelRouteID: value.ModelRouteID, ModelPublicID: value.ModelPublicID, ModelUpstreamModel: value.ModelUpstreamModel,
@@ -266,7 +273,7 @@ func toAuditDomain(value requestAuditModel) audit.Record {
 		EstimatedCostInUSDTicks: value.EstimatedCostInUSDTicks, PricingModel: value.PricingModel, PricingVersion: value.PricingVersion,
 		NumSourcesUsed: value.NumSourcesUsed, NumServerSideToolsUsed: value.NumServerSideToolsUsed,
 		ContextInputTokens: value.ContextInputTokens, ContextOutputTokens: value.ContextOutputTokens, FirstTokenMS: value.FirstTokenMS, DurationMS: value.DurationMS,
-		ErrorCode: value.ErrorCode, AttemptCount: value.AttemptCount, CreatedAt: value.CreatedAt,
+		ErrorCode: value.ErrorCode, AttemptCount: value.AttemptCount, ConsoleGuard: consoleGuard, CreatedAt: value.CreatedAt,
 	}
 }
 

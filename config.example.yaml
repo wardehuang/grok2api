@@ -89,6 +89,8 @@ media:
     path: "./data/media"
 
 routing:
+  # [按需修改] Console 普通聊天账号调度：balanced 均衡调度；sequential 按 Priority 顺序持续使用当前账号，额度耗尽或不可用后切换。
+  consoleScheduling: balanced
   # [按需修改] 服务端推理回放缓存：多轮时自动补回客户端未携带的 encrypted_content。
   reasoningReplayEnabled: true
   reasoningReplayTTL: 1h
@@ -162,8 +164,11 @@ qualityGuard:
     # idleAccountCooldown: 24h
 
 # Console 账号专用的降智防护（与 qualityGuard 完全独立）。
-# 判定口径同 fork requestRetry：只有真实 reasoning delta / encrypted_content
-# 算思考；扣流 30s、可见输出阈值 8 token、共试 5 个账号、恒 fail_closed；
+# TPS=(output_tokens + reasoning_tokens)*1000/(duration_ms-first_token_ms)。
+# TPS 超过 hardTPS 直接判定降智；超过 softTPS 且没有真实 thinking 也判定降智。
+# 只有真实 reasoning delta / encrypted_content 算思考；共试 5 个账号、恒 fail_closed；
 # 命中降智的 Console 账号会立即停用，需管理员手动恢复。
 consoleGuard:
   enabled: false
+  softTPS: 500
+  hardTPS: 1000

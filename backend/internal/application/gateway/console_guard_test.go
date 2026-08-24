@@ -16,36 +16,41 @@ import (
 )
 
 // 测试移植自 fork quality_retry_test.go 的判定/扫描用例，适配 console guard
-// 的固定参数（hold 30s、minOutput 8、fail_closed、命中即停用）。
+// 的固定参数（hold 30s、TPS 双阈值、fail_closed、命中即停用）。
 
 func consoleGuardTestRoute(provider accountdomain.Provider) modeldomain.Route {
 	return modeldomain.Route{Provider: provider, UpstreamModel: "grok-4.6", PublicID: "grok-4.6"}
 }
 
-var consoleGuardTestCfg = ConsoleGuardRuntime{Enabled: true, MinOutputTokens: 8, HoldTimeout: time.Second}
+const (
+	consoleGuardTestSoftTPS = 500.0
+	consoleGuardTestHardTPS = 1000.0
+)
+
+var consoleGuardTestCfg = ConsoleGuardRuntime{Enabled: true, SoftTPS: consoleGuardTestSoftTPS, HardTPS: consoleGuardTestHardTPS, HoldTimeout: time.Second}
 
 func TestClassifyConsoleGuardHold(t *testing.T) {
 	t.Parallel()
-	if ClassifyConsoleGuardHold(ConsoleGuardSignals{HasThinking: true}, 8) != ConsoleGuardDeliver {
+	if ClassifyConsoleGuardHold(ConsoleGuardSignals{HasThinking: true}, consoleGuardTestSoftTPS, consoleGuardTestHardTPS) != ConsoleGuardDeliver {
 		t.Fatal("thinking must deliver")
 	}
-	if ClassifyConsoleGuardHold(ConsoleGuardSignals{ReasoningTokens: 60, OutputTokens: 90}, 8) != ConsoleGuardWithhold {
+	if ClassifyConsoleGuardHold(ConsoleGuardSignals{ReasoningTokens: 60, OutputTokens: 90, ObservationDurationMS: 50}, consoleGuardTestSoftTPS, consoleGuardTestHardTPS) != ConsoleGuardWithhold {
 		t.Fatal("usage-only reasoning with no streamed thinking must withhold")
 	}
-	if got := ClassifyConsoleGuardHold(ConsoleGuardSignals{Terminal: true, VisibleTokens: 4}, 8); got != ConsoleGuardDeliver {
+	if got := ClassifyConsoleGuardHold(ConsoleGuardSignals{Terminal: true, VisibleTokens: 4, ObservationDurationMS: 50}, consoleGuardTestSoftTPS, consoleGuardTestHardTPS); got != ConsoleGuardDeliver {
 		t.Fatalf("short reply must deliver, got %s", got)
 	}
-	if got := ClassifyConsoleGuardHold(ConsoleGuardSignals{Terminal: true, VisibleTokens: 40}, 8); got != ConsoleGuardWithhold {
+	if got := ClassifyConsoleGuardHold(ConsoleGuardSignals{Terminal: true, VisibleTokens: 40, ObservationDurationMS: 50}, consoleGuardTestSoftTPS, consoleGuardTestHardTPS); got != ConsoleGuardWithhold {
 		t.Fatalf("finished no-think sample must withhold, got %s", got)
 	}
-	if got := ClassifyConsoleGuardHold(ConsoleGuardSignals{Terminal: true}, 8); got != ConsoleGuardWait {
+	if got := ClassifyConsoleGuardHold(ConsoleGuardSignals{Terminal: true}, consoleGuardTestSoftTPS, consoleGuardTestHardTPS); got != ConsoleGuardWait {
 		t.Fatalf("empty terminal must wait for empty-stream classification, got %s", got)
 	}
-	stub := ConsoleGuardSignals{ReasoningStarted: true, VisibleTokens: 40}
-	if got := ClassifyConsoleGuardHold(stub, 8); got != ConsoleGuardWait {
+	stub := ConsoleGuardSignals{ReasoningStarted: true, VisibleTokens: 40, ObservationDurationMS: 50}
+	if got := ClassifyConsoleGuardHold(stub, consoleGuardTestSoftTPS, consoleGuardTestHardTPS); got != ConsoleGuardWait {
 		t.Fatalf("stub without terminal must keep waiting for usage, got %s", got)
 	}
-	if got := ClassifyConsoleGuardHold(stub.withTerminal(), 8); got != ConsoleGuardWithhold {
+	if got := ClassifyConsoleGuardHold(stub.withTerminal(), consoleGuardTestSoftTPS, consoleGuardTestHardTPS); got != ConsoleGuardWithhold {
 		t.Fatalf("stub + terminal + enough output must withhold, got %s", got)
 	}
 }
@@ -100,7 +105,7 @@ func TestObserveConsoleGuardChunkUsageOnlyIsNotThinking(t *testing.T) {
 	if !sig.ReasoningStarted || !sig.Terminal {
 		t.Fatalf("chat stub signals = %#v", sig)
 	}
-	if ClassifyConsoleGuardHold(sig, 8) != ConsoleGuardWithhold {
+	if ClassifyConsoleGuardHold(sig, consoleGuardTestSoftTPS, consoleGuardTestHardTPS) != ConsoleGuardWithhold {
 		t.Fatalf("degraded dump must withhold: %#v", sig)
 	}
 
@@ -112,7 +117,7 @@ func TestObserveConsoleGuardChunkUsageOnlyIsNotThinking(t *testing.T) {
 	if fakeSig.HasThinking {
 		t.Fatalf("usage.reasoning_tokens alone must not prove thinking: %#v", fakeSig)
 	}
-	if ClassifyConsoleGuardHold(fakeSig, 8) != ConsoleGuardWithhold {
+	if ClassifyConsoleGuardHold(fakeSig, consoleGuardTestSoftTPS, consoleGuardTestHardTPS) != ConsoleGuardWithhold {
 		t.Fatalf("fake reasoning tokens with no deltas must withhold: %#v", fakeSig)
 	}
 }
@@ -129,7 +134,7 @@ func TestObserveConsoleGuardChunkRealThinkingDelivers(t *testing.T) {
 	if !sig.HasThinking {
 		t.Fatalf("streamed summary must count as thinking: %#v", sig)
 	}
-	if ClassifyConsoleGuardHold(sig, 8) != ConsoleGuardDeliver {
+	if ClassifyConsoleGuardHold(sig, consoleGuardTestSoftTPS, consoleGuardTestHardTPS) != ConsoleGuardDeliver {
 		t.Fatalf("real thinking should deliver")
 	}
 
@@ -143,7 +148,7 @@ func TestObserveConsoleGuardChunkRealThinkingDelivers(t *testing.T) {
 	if !encSig.HasThinking {
 		t.Fatalf("encrypted reasoning item must count as thinking: %#v", encSig)
 	}
-	if ClassifyConsoleGuardHold(encSig, 8) != ConsoleGuardDeliver {
+	if ClassifyConsoleGuardHold(encSig, consoleGuardTestSoftTPS, consoleGuardTestHardTPS) != ConsoleGuardDeliver {
 		t.Fatalf("encrypted thinking should deliver")
 	}
 }
@@ -160,8 +165,8 @@ func TestObserveConsoleGuardChunkEmptyReasoningStubWaitsForUsage(t *testing.T) {
 	if respSig.HasThinking {
 		t.Fatalf("empty reasoning item must not count as thinking: %#v", respSig)
 	}
-	if ClassifyConsoleGuardHold(respSig, 8) != ConsoleGuardWait {
-		t.Fatalf("midstream empty stub must wait for usage, got %s (%#v)", ClassifyConsoleGuardHold(respSig, 8), respSig)
+	if ClassifyConsoleGuardHold(respSig, consoleGuardTestSoftTPS, consoleGuardTestHardTPS) != ConsoleGuardWait {
+		t.Fatalf("midstream empty stub must wait for usage, got %s (%#v)", ClassifyConsoleGuardHold(respSig, consoleGuardTestSoftTPS, consoleGuardTestHardTPS), respSig)
 	}
 }
 
@@ -243,9 +248,10 @@ func TestPeekConsoleGuardStreamHoldTimeoutEmptyDoesNotFailOpen(t *testing.T) {
 	go func() {
 		defer close(done)
 		_, verdict, _, _, peekErr = peekConsoleGuardStream(ctx, reader, consoleGuardProtocolChat, ConsoleGuardRuntime{
-			Enabled:         true,
-			MinOutputTokens: 8,
-			HoldTimeout:     20 * time.Millisecond,
+			Enabled:     true,
+			SoftTPS:     consoleGuardTestSoftTPS,
+			HardTPS:     consoleGuardTestHardTPS,
+			HoldTimeout: 20 * time.Millisecond,
 		})
 	}()
 	select {

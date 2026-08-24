@@ -279,6 +279,7 @@ type Selector struct {
 	cooldownMax            time.Duration
 	capacityWait           time.Duration
 	preferFreeBuild        bool
+	consoleScheduling      string
 	excludeBuildBotFlagged bool
 	segmentedConfig        segmentedSelectorConfig
 	segmentedState         segmentedSelectorState
@@ -347,6 +348,13 @@ func (s *Selector) UpdatePreferFreeBuild(value bool) {
 	s.configMu.Unlock()
 }
 
+// UpdateConsoleScheduling 热更新 Console 聊天账号调度策略。
+func (s *Selector) UpdateConsoleScheduling(value string) {
+	s.configMu.Lock()
+	s.consoleScheduling = value
+	s.configMu.Unlock()
+}
+
 // UpdateSegmentedSelector changes the large-pool bounded planner policy.
 func (s *Selector) UpdateSegmentedSelector(enabled bool, minCandidates, windowSize int) {
 	s.configMu.Lock()
@@ -378,6 +386,12 @@ func (s *Selector) preferFreeBuildEnabled() bool {
 	s.configMu.RLock()
 	defer s.configMu.RUnlock()
 	return s.preferFreeBuild
+}
+
+func (s *Selector) consoleSequentialEnabled(provider account.Provider, quotaMode string) bool {
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
+	return provider == account.ProviderConsole && quotaMode == "console" && s.consoleScheduling == "sequential"
 }
 
 func (s *Selector) excludeBuildBotFlaggedEnabled() bool {
@@ -611,7 +625,7 @@ func (s *Selector) acquire(ctx context.Context, provider account.Provider, model
 	// 粘性账号仅因并发满载而暂时不可用时，先等待该账号；超时后允许本次请求临时借用
 	// 其他账号，但不覆盖原绑定，避免并行请求让活跃会话在账号池中来回抖动。
 	if saturatedStickyID != 0 {
-		plan, err := s.planCandidateIndexes(ctx, values, normalCandidates, time.Now().UTC(), s.resolveTierOrder(provider, upstreamModel, quotaMode))
+		plan, err := s.planCandidateIndexes(ctx, values, normalCandidates, time.Now().UTC(), s.resolveTierOrder(provider, upstreamModel, quotaMode), s.consoleSequentialEnabled(provider, quotaMode))
 		if err != nil {
 			return nil, err
 		}
@@ -635,7 +649,10 @@ func (s *Selector) acquire(ctx context.Context, provider account.Provider, model
 		}
 		return nil, &SelectionUnavailableError{Reason: SelectionSaturated, RetryAfter: time.Second}
 	}
-	activeRequest := s.nextSegmentedActiveRequest(provider, upstreamModel, quotaMode, len(normalCandidates))
+	var activeRequest *segmentedSelectorActiveRequest
+	if !s.consoleSequentialEnabled(provider, quotaMode) {
+		activeRequest = s.nextSegmentedActiveRequest(provider, upstreamModel, quotaMode, len(normalCandidates))
+	}
 	if activeRequest != nil {
 		lease, acquireErr := s.acquireSegmentedCandidates(ctx, values, normalCandidates, quotaMode, s.resolveTierOrder(provider, upstreamModel, quotaMode), *activeRequest)
 		if acquireErr != nil || lease == nil || stickyKey == "" {
@@ -653,7 +670,7 @@ func (s *Selector) acquire(ctx context.Context, provider account.Provider, model
 		currentTime := time.Now().UTC()
 		staleClaims := 0
 		capacityMisses := 0
-		plan, err := s.planCandidateIndexes(ctx, values, normalCandidates, currentTime, s.resolveTierOrder(provider, upstreamModel, quotaMode))
+		plan, err := s.planCandidateIndexes(ctx, values, normalCandidates, currentTime, s.resolveTierOrder(provider, upstreamModel, quotaMode), s.consoleSequentialEnabled(provider, quotaMode))
 		if err != nil {
 			return nil, err
 		}

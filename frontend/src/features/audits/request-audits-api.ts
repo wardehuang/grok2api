@@ -23,6 +23,47 @@ export type AuditBillingBreakdownDTO = {
   totalInUsdTicks: number;
 };
 
+export type AuditConsoleGuardEvidenceDTO = {
+  code: string;
+  detail: string;
+};
+
+export type AuditConsoleGuardDetailDTO = {
+  protocol: string;
+  verdict: string;
+  action: string;
+  attempt: number;
+  maxAttempts: number;
+  softTPS?: number;
+  hardTPS?: number;
+  minOutputTokens: number;
+  holdTimeoutMs: number;
+  hasThinking: boolean;
+  thinkingEvidence: AuditConsoleGuardEvidenceDTO[];
+  reasoningStarted: boolean;
+  reasoningStartEvidence: AuditConsoleGuardEvidenceDTO[];
+  visibleRunes: number;
+  visibleTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  usageReported: boolean;
+  usageInputTokens: number;
+  usageOutputTokens: number;
+  usageReasoningTokens: number;
+  usageTotalTokens: number;
+  terminal: boolean;
+  terminalEvent: string;
+  holdExpired: boolean;
+  observationDurationMs: number;
+  upstreamDurationMs: number;
+  firstVisibleObserved: boolean;
+  firstVisibleMs: number;
+  generationWindowMs: number;
+  outputTokensPerSecond: number;
+  accountDisabled: boolean;
+  decisionReasons: AuditConsoleGuardEvidenceDTO[];
+};
+
 export type AuditDTO = {
   id: string;
   requestId: string;
@@ -67,6 +108,7 @@ export type AuditDTO = {
   durationMs: number;
   errorCode?: string;
   attemptCount: number;
+  consoleGuard?: AuditConsoleGuardDetailDTO;
   createdAt: string;
 };
 
@@ -140,6 +182,20 @@ const auditBillingValidator = hasShape({
   model: isOptional(isString), version: isOptional(isString), tier: isOptional(isOneOf("standard", "long_context", "media")),
   components: isArrayOf(auditBillingComponentValidator), totalInUsdTicks: isNumber,
 });
+const auditConsoleGuardEvidenceValidator = hasShape({ code: isString, detail: isString });
+const auditConsoleGuardValidator = hasShape({
+  protocol: isString, verdict: isString, action: isString, attempt: isNumber, maxAttempts: isNumber,
+  softTPS: isOptional(isNumber), hardTPS: isOptional(isNumber),
+  minOutputTokens: isNumber, holdTimeoutMs: isNumber, hasThinking: isBoolean,
+  thinkingEvidence: isArrayOf(auditConsoleGuardEvidenceValidator), reasoningStarted: isBoolean,
+  reasoningStartEvidence: isArrayOf(auditConsoleGuardEvidenceValidator), visibleRunes: isNumber,
+  visibleTokens: isNumber, outputTokens: isNumber, reasoningTokens: isNumber, usageReported: isBoolean,
+  usageInputTokens: isNumber, usageOutputTokens: isNumber, usageReasoningTokens: isNumber, usageTotalTokens: isNumber,
+  terminal: isBoolean, terminalEvent: isString, holdExpired: isBoolean, observationDurationMs: isNumber,
+  upstreamDurationMs: isNumber, firstVisibleObserved: isBoolean, firstVisibleMs: isNumber,
+  generationWindowMs: isNumber, outputTokensPerSecond: isNumber, accountDisabled: isBoolean,
+  decisionReasons: isArrayOf(auditConsoleGuardEvidenceValidator),
+});
 const auditValidator = hasShape({
   id: isString, requestId: isString, clientKeyId: isString, clientKeyName: isOptional(isString), clientIp: isOptional(isString), modelRouteId: isString,
   modelPublicId: isOptional(isString), modelUpstreamModel: isOptional(isString), provider: isOneOf("grok_build", "grok_web", "grok_console"),
@@ -154,7 +210,7 @@ const auditValidator = hasShape({
   costInUsdTicks: isNumber, estimatedCostInUsdTicks: isNumber, pricingModel: isOptional(isString), pricingVersion: isOptional(isString), billing: isOptional(auditBillingValidator),
   numSourcesUsed: isNumber, numServerSideToolsUsed: isNumber, contextInputTokens: isNumber, contextOutputTokens: isNumber,
   firstTokenMs: isOptional(isNumber), outputTokensPerSecond: isOptional(isNumber),
-  durationMs: isNumber, errorCode: isOptional(isString), attemptCount: isNumber, createdAt: isString,
+  durationMs: isNumber, errorCode: isOptional(isString), attemptCount: isNumber, consoleGuard: isOptional(auditConsoleGuardValidator), createdAt: isString,
 });
 const auditAttemptValidator = hasShape({
   id: isString, number: isNumber, source: isOneOf("upstream_http", "gateway_transport", "credential"), stage: isString,

@@ -101,6 +101,8 @@ type RoutingConfig struct {
 	MaxAttempts                         int
 	VideoMaxAttempts                    int
 	PreferFreeBuild                     bool
+	ConsoleScheduling                   string
+	ConsoleSchedulingProvided           bool
 	MarkBuildChatDeniedAsReauth         bool
 	MarkBuildChatDeniedAsReauthProvided bool
 	AccountIsolatedConnections          bool
@@ -149,9 +151,14 @@ type AccountsConfig struct {
 	ExcludeBuildBotFlaggedFromSchedulingProvided bool
 }
 
-// ConsoleGuardConfig 是管理接口使用的 Console 降智防护开关输入。
+// ConsoleGuardConfig 是管理接口使用的 Console 降智防护输入。
 type ConsoleGuardConfig struct {
-	Enabled bool
+	Enabled         bool
+	SoftTPS         float64
+	HardTPS         float64
+	EnabledProvided bool
+	SoftTPSProvided bool
+	HardTPSProvided bool
 }
 
 // EditableConfig 聚合管理端允许修改的运行参数。
@@ -168,7 +175,7 @@ type EditableConfig struct {
 	ClientKeyDefaults ClientKeyDefaultsConfig
 	Accounts          AccountsConfig
 	ConsoleGuard      ConsoleGuardConfig
-	// ConsoleGuardProvided 区分旧管理端未发送 consoleGuard 与显式提交默认值。
+	// ConsoleGuardProvided 区分旧管理端未发送 consoleGuard 与显式提交字段。
 	ConsoleGuardProvided bool
 	// AccountsProvided 区分旧管理端未发送 accounts 与显式提交默认值。
 	AccountsProvided bool
@@ -386,6 +393,7 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 	segmentedEnabled := base.Routing.SegmentedSelectorEnabled
 	segmentedMinCandidates := base.Routing.SegmentedMinCandidates
 	segmentedWindowSize := base.Routing.SegmentedWindowSize
+	consoleScheduling := base.Routing.ConsoleScheduling
 	accountIsolatedConnections := base.Routing.AccountIsolatedConnections
 	if value.Routing.AccountIsolatedConnections != nil {
 		accountIsolatedConnections = *value.Routing.AccountIsolatedConnections
@@ -395,11 +403,15 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 		segmentedMinCandidates = value.Routing.SegmentedSelector.MinCandidates
 		segmentedWindowSize = value.Routing.SegmentedSelector.WindowSize
 	}
+	if value.Routing.ConsoleScheduling != nil && strings.TrimSpace(*value.Routing.ConsoleScheduling) != "" {
+		consoleScheduling = strings.TrimSpace(*value.Routing.ConsoleScheduling)
+	}
 	base.Routing = config.RoutingConfig{
 		StickyTTL: config.Duration(value.Routing.StickyTTL), CooldownBase: config.Duration(value.Routing.CooldownBase),
 		CooldownMax: config.Duration(value.Routing.CooldownMax), CapacityWait: config.Duration(capacityWait), MaxAttempts: value.Routing.MaxAttempts, VideoMaxAttempts: value.Routing.VideoMaxAttempts,
 		MarkBuildChatDeniedAsReauth: value.Routing.MarkBuildChatDeniedAsReauth,
 		PreferFreeBuild:             value.Routing.PreferFreeBuild,
+		ConsoleScheduling:           consoleScheduling,
 		AccountIsolatedConnections:  accountIsolatedConnections,
 		SegmentedSelectorEnabled:    segmentedEnabled,
 		SegmentedMinCandidates:      segmentedMinCandidates,
@@ -436,12 +448,19 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 	base.Accounts.ExcludeBuildBotFlaggedFromScheduling = value.Accounts.ExcludeBuildBotFlaggedFromScheduling
 	// ConsoleGuard 为后续新增段；旧持久化缺字段时沿用当前配置（含文件默认）。
 	base.ConsoleGuard.Enabled = base.ConsoleGuard.Enabled || value.ConsoleGuard.Enabled
+	if value.ConsoleGuard.SoftTPS > 0 {
+		base.ConsoleGuard.SoftTPS = value.ConsoleGuard.SoftTPS
+	}
+	if value.ConsoleGuard.HardTPS > 0 {
+		base.ConsoleGuard.HardTPS = value.ConsoleGuard.HardTPS
+	}
 	return base
 }
 
 func toDomainConfig(value config.Config) settingsdomain.Config {
 	randomDelay := value.Batch.RandomDelay.Value()
 	accountIsolatedConnections := value.Routing.AccountIsolatedConnections
+	consoleSchedulingValue := value.Routing.ConsoleScheduling
 	return settingsdomain.Config{
 		Server: settingsdomain.ServerConfig{MaxConcurrentRequests: value.Server.MaxConcurrentRequests},
 		ProviderBuild: settingsdomain.ProviderBuildConfig{
@@ -484,6 +503,7 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 			CooldownMax: value.Routing.CooldownMax.Value(), CapacityWait: value.Routing.CapacityWait.Value(), MaxAttempts: value.Routing.MaxAttempts, VideoMaxAttempts: value.Routing.VideoMaxAttempts,
 			MarkBuildChatDeniedAsReauth: value.Routing.MarkBuildChatDeniedAsReauth,
 			PreferFreeBuild:             value.Routing.PreferFreeBuild,
+			ConsoleScheduling:           &consoleSchedulingValue,
 			AccountIsolatedConnections:  &accountIsolatedConnections,
 			SegmentedSelector: &settingsdomain.SegmentedSelectorConfig{
 				ActiveEnabled: value.Routing.SegmentedSelectorEnabled,
@@ -505,7 +525,7 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 			AutoCleanReauthMinAge:                value.Accounts.AutoCleanReauthMinAge.Value(),
 			AutoCleanIncludeDisabled:             value.Accounts.AutoCleanIncludeDisabled,
 		},
-		ConsoleGuard: settingsdomain.ConsoleGuardConfig{Enabled: value.ConsoleGuard.Enabled},
+		ConsoleGuard: settingsdomain.ConsoleGuardConfig{Enabled: value.ConsoleGuard.Enabled, SoftTPS: value.ConsoleGuard.SoftTPS, HardTPS: value.ConsoleGuard.HardTPS},
 	}
 }
 
@@ -569,6 +589,9 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 	next.Routing.MaxAttempts = input.Routing.MaxAttempts
 	next.Routing.VideoMaxAttempts = input.Routing.VideoMaxAttempts
 	next.Routing.PreferFreeBuild = input.Routing.PreferFreeBuild
+	if input.Routing.ConsoleSchedulingProvided {
+		next.Routing.ConsoleScheduling = strings.TrimSpace(input.Routing.ConsoleScheduling)
+	}
 	if input.Routing.AccountIsolatedConnectionsProvided {
 		next.Routing.AccountIsolatedConnections = input.Routing.AccountIsolatedConnections
 	}
@@ -601,7 +624,15 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 		next.Accounts.AutoCleanIncludeDisabled = input.Accounts.AutoCleanIncludeDisabled
 	}
 	if input.ConsoleGuardProvided {
-		next.ConsoleGuard.Enabled = input.ConsoleGuard.Enabled
+		if input.ConsoleGuard.EnabledProvided {
+			next.ConsoleGuard.Enabled = input.ConsoleGuard.Enabled
+		}
+		if input.ConsoleGuard.SoftTPSProvided {
+			next.ConsoleGuard.SoftTPS = input.ConsoleGuard.SoftTPS
+		}
+		if input.ConsoleGuard.HardTPSProvided {
+			next.ConsoleGuard.HardTPS = input.ConsoleGuard.HardTPS
+		}
 	}
 
 	type durationInput struct {
@@ -715,6 +746,8 @@ func toEditable(cfg config.Config) EditableConfig {
 			MarkBuildChatDeniedAsReauth:         cfg.Routing.MarkBuildChatDeniedAsReauth,
 			MarkBuildChatDeniedAsReauthProvided: true,
 			PreferFreeBuild:                     cfg.Routing.PreferFreeBuild,
+			ConsoleScheduling:                   cfg.Routing.ConsoleScheduling,
+			ConsoleSchedulingProvided:           true,
 			AccountIsolatedConnections:          cfg.Routing.AccountIsolatedConnections,
 			AccountIsolatedConnectionsProvided:  true,
 			SegmentedSelector: SegmentedSelectorConfig{
@@ -739,7 +772,7 @@ func toEditable(cfg config.Config) EditableConfig {
 			AutoCleanReauthMinAge:                        cfg.Accounts.AutoCleanReauthMinAge.String(),
 			AutoCleanIncludeDisabled:                     cfg.Accounts.AutoCleanIncludeDisabled,
 		},
-		ConsoleGuard:         ConsoleGuardConfig{Enabled: cfg.ConsoleGuard.Enabled},
+		ConsoleGuard:         ConsoleGuardConfig{Enabled: cfg.ConsoleGuard.Enabled, SoftTPS: cfg.ConsoleGuard.SoftTPS, HardTPS: cfg.ConsoleGuard.HardTPS, EnabledProvided: true, SoftTPSProvided: true, HardTPSProvided: true},
 		ConsoleGuardProvided: true,
 		AccountsProvided:     true,
 	}

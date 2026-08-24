@@ -127,6 +127,9 @@ func validatePreparedAudit(value preparedAudit) error {
 	if row.StatusCode < 100 || row.StatusCode > 599 {
 		return errors.New("status_code must be between 100 and 599")
 	}
+	if utf8.RuneCountInString(row.ConsoleGuardDetailJSON) > 65536 {
+		return errors.New("console guard detail exceeds the storage limit")
+	}
 	attemptNumbers := make(map[int]struct{}, len(value.attempts))
 	for index, attempt := range value.attempts {
 		if err := validatePreparedAuditAttempt(attempt); err != nil {
@@ -351,6 +354,14 @@ func toAuditModels(value audit.Record) (requestAuditModel, []requestAuditAttempt
 		digest := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%d\x00%d", value.RequestID, value.ClientKeyID, value.ModelRouteID, value.CreatedAt.UnixNano())))
 		eventID = fmt.Sprintf("evt_%x", digest[:18])
 	}
+	consoleGuardDetail := ""
+	if value.ConsoleGuard != nil {
+		encoded, err := json.Marshal(value.ConsoleGuard)
+		if err != nil {
+			return requestAuditModel{}, nil, fmt.Errorf("序列化 Console 降智详情: %w", err)
+		}
+		consoleGuardDetail = string(encoded)
+	}
 	row := requestAuditModel{
 		EventID: truncate(eventID, 64), RequestID: truncate(value.RequestID, 64), ClientKeyID: value.ClientKeyID, ClientKeyName: truncate(value.ClientKeyName, 160), ClientIP: strings.TrimSpace(value.ClientIP),
 		ModelRouteID: value.ModelRouteID, ModelPublicID: truncate(value.ModelPublicID, 255), ModelUpstreamModel: truncate(value.ModelUpstreamModel, 255),
@@ -365,7 +376,7 @@ func toAuditModels(value audit.Record) (requestAuditModel, []requestAuditAttempt
 		EstimatedCostInUSDTicks: nonNegative(value.EstimatedCostInUSDTicks), PricingModel: truncate(value.PricingModel, 100), PricingVersion: truncate(value.PricingVersion, 20),
 		NumSourcesUsed: nonNegative(value.NumSourcesUsed), NumServerSideToolsUsed: nonNegative(value.NumServerSideToolsUsed),
 		ContextInputTokens: nonNegative(value.ContextInputTokens), ContextOutputTokens: nonNegative(value.ContextOutputTokens), FirstTokenMS: normalizedFirstToken(value), DurationMS: nonNegative(value.DurationMS),
-		ErrorCode: truncate(value.ErrorCode, 100), AttemptCount: len(value.Attempts), CreatedAt: value.CreatedAt,
+		ErrorCode: truncate(value.ErrorCode, 100), AttemptCount: len(value.Attempts), ConsoleGuardDetailJSON: consoleGuardDetail, CreatedAt: value.CreatedAt,
 	}
 	attempts := make([]requestAuditAttemptModel, 0, len(value.Attempts))
 	for _, attempt := range value.Attempts {
@@ -919,10 +930,10 @@ func (r *AuditRepository) degradeClassifiedQuery(tx *gorm.DB, input repository.D
 	if r.db.dialect == "postgres" {
 		castType = "DOUBLE PRECISION"
 	}
-	generationExpression := fmt.Sprintf("(CASE WHEN a.reasoning_tokens > 0 AND a.duration_ms - a.first_token_ms < a.first_token_ms AND a.duration_ms - a.first_token_ms < %d THEN a.duration_ms ELSE a.duration_ms - a.first_token_ms END)", audit.DefaultDegradeMinGenMS)
+	generationExpression := "(a.duration_ms - a.first_token_ms)"
 	// NULLIF keeps PostgreSQL safe even if its planner evaluates the throughput
 	// expression before the duration guard in the WHERE clause.
-	tpsExpression := fmt.Sprintf("(CAST(a.output_tokens AS %s) * 1000.0 / NULLIF(%s, 0))", castType, generationExpression)
+	tpsExpression := fmt.Sprintf("(CAST((a.output_tokens + a.reasoning_tokens) AS %s) * 1000.0 / NULLIF(%s, 0))", castType, generationExpression)
 	selectTPS := fmt.Sprintf("CASE WHEN a.error_code = ? THEN 0 ELSE %s END", tpsExpression)
 	classExpression := fmt.Sprintf("CASE WHEN a.error_code = ? THEN ? WHEN ? AND %s < ? THEN ? WHEN %s >= ? THEN ? ELSE ? END", generationExpression, tpsExpression)
 	speedPredicate := fmt.Sprintf(

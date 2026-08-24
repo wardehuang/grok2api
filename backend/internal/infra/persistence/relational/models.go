@@ -330,6 +330,7 @@ type requestAuditModel struct {
 	DurationMS              int64     `gorm:"not null;default:0"`
 	ErrorCode               string    `gorm:"size:100;check:chk_request_audits_error_code,length(error_code) <= 100"`
 	AttemptCount            int       `gorm:"not null;default:0;check:chk_request_audits_attempt_count,attempt_count >= 0"`
+	ConsoleGuardDetailJSON  string    `gorm:"type:text;not null;default:'';check:chk_request_audits_console_guard_detail,length(console_guard_detail_json) <= 65536"`
 	CreatedAt               time.Time `gorm:"not null"`
 }
 

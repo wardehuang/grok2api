@@ -105,6 +105,7 @@ type routingConfigDTO struct {
 	MaxAttempts                 int                         `json:"maxAttempts"`
 	VideoMaxAttempts            int                         `json:"videoMaxAttempts"`
 	PreferFreeBuild             bool                        `json:"preferFreeBuild"`
+	ConsoleScheduling           string                      `json:"consoleScheduling"`
 	MarkBuildChatDeniedAsReauth *bool                       `json:"markBuildChatDeniedAsReauth,omitempty"`
 	AccountIsolatedConnections  *bool                       `json:"accountIsolatedConnections,omitempty"`
 	SegmentedSelector           *segmentedSelectorConfigDTO `json:"segmentedSelector,omitempty"`
@@ -139,7 +140,9 @@ type accountsConfigDTO struct {
 }
 
 type consoleGuardConfigDTO struct {
-	Enabled *bool `json:"enabled,omitempty"`
+	Enabled *bool    `json:"enabled,omitempty"`
+	SoftTPS *float64 `json:"softTPS,omitempty"`
+	HardTPS *float64 `json:"hardTPS,omitempty"`
 }
 
 type settingsResponse struct {
@@ -231,6 +234,8 @@ func (value settingsConfigDTO) toApplication() settingsapp.EditableConfig {
 			StickyTTL: value.Routing.StickyTTL, CooldownBase: value.Routing.CooldownBase,
 			CooldownMax: value.Routing.CooldownMax, CapacityWait: value.Routing.CapacityWait, MaxAttempts: value.Routing.MaxAttempts, VideoMaxAttempts: value.Routing.VideoMaxAttempts,
 			PreferFreeBuild:                     value.Routing.PreferFreeBuild,
+			ConsoleScheduling:                   value.Routing.ConsoleScheduling,
+			ConsoleSchedulingProvided:           value.Routing.ConsoleScheduling != "",
 			MarkBuildChatDeniedAsReauth:         boolValue(value.Routing.MarkBuildChatDeniedAsReauth),
 			MarkBuildChatDeniedAsReauthProvided: value.Routing.MarkBuildChatDeniedAsReauth != nil,
 			AccountIsolatedConnections:          boolValue(value.Routing.AccountIsolatedConnections),
@@ -266,8 +271,15 @@ func (value settingsConfigDTO) toApplication() settingsapp.EditableConfig {
 		result.AccountsProvided = true
 	}
 	if value.ConsoleGuard != nil {
-		result.ConsoleGuard = settingsapp.ConsoleGuardConfig{Enabled: boolValue(value.ConsoleGuard.Enabled)}
-		result.ConsoleGuardProvided = value.ConsoleGuard.Enabled != nil
+		result.ConsoleGuard = settingsapp.ConsoleGuardConfig{
+			Enabled:         boolValue(value.ConsoleGuard.Enabled),
+			SoftTPS:         floatValue(value.ConsoleGuard.SoftTPS),
+			HardTPS:         floatValue(value.ConsoleGuard.HardTPS),
+			EnabledProvided: value.ConsoleGuard.Enabled != nil,
+			SoftTPSProvided: value.ConsoleGuard.SoftTPS != nil,
+			HardTPSProvided: value.ConsoleGuard.HardTPS != nil,
+		}
+		result.ConsoleGuardProvided = result.ConsoleGuard.EnabledProvided || result.ConsoleGuard.SoftTPSProvided || result.ConsoleGuard.HardTPSProvided
 	}
 	return result
 }
@@ -318,6 +330,7 @@ func newSettingsResponse(value settingsapp.Snapshot) settingsResponse {
 				CooldownMax: config.Routing.CooldownMax, CapacityWait: config.Routing.CapacityWait, MaxAttempts: config.Routing.MaxAttempts, VideoMaxAttempts: config.Routing.VideoMaxAttempts,
 				MarkBuildChatDeniedAsReauth: boolPointer(config.Routing.MarkBuildChatDeniedAsReauth),
 				PreferFreeBuild:             config.Routing.PreferFreeBuild,
+				ConsoleScheduling:           config.Routing.ConsoleScheduling,
 				AccountIsolatedConnections:  boolPointer(config.Routing.AccountIsolatedConnections),
 				SegmentedSelector: &segmentedSelectorConfigDTO{
 					Enabled: config.Routing.SegmentedSelector.Enabled, MinCandidates: config.Routing.SegmentedSelector.MinCandidates,
@@ -339,7 +352,7 @@ func newSettingsResponse(value settingsapp.Snapshot) settingsResponse {
 				AutoCleanReauthMinAge:                config.Accounts.AutoCleanReauthMinAge,
 				AutoCleanIncludeDisabled:             config.Accounts.AutoCleanIncludeDisabled,
 			},
-			ConsoleGuard: &consoleGuardConfigDTO{Enabled: boolPointer(config.ConsoleGuard.Enabled)},
+			ConsoleGuard: &consoleGuardConfigDTO{Enabled: boolPointer(config.ConsoleGuard.Enabled), SoftTPS: floatPointer(config.ConsoleGuard.SoftTPS), HardTPS: floatPointer(config.ConsoleGuard.HardTPS)},
 		},
 		RecommendedProviderBuild: providerBuildRecommendationDTO{
 			ClientVersion: value.RecommendedProviderBuild.ClientVersion,
@@ -360,9 +373,18 @@ func stringPointer(value string) *string { return &value }
 
 func boolPointer(value bool) *bool { return &value }
 
+func floatPointer(value float64) *float64 { return &value }
+
 func boolValue(value *bool) bool {
 	if value == nil {
 		return false
+	}
+	return *value
+}
+
+func floatValue(value *float64) float64 {
+	if value == nil {
+		return 0
 	}
 	return *value
 }

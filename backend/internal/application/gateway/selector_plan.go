@@ -26,8 +26,9 @@ type candidateScore struct {
 
 // candidatePlan 使用线性建堆保留完整路由优先级，并允许 claim 失败后按顺序取下一账号。
 type candidatePlan struct {
-	values []account.RoutingCandidate
-	scores []candidateScore
+	values     []account.RoutingCandidate
+	scores     []candidateScore
+	sequential bool
 }
 
 func (p *candidatePlan) Len() int { return len(p.scores) }
@@ -54,6 +55,11 @@ func (p *candidatePlan) Pop() any {
 func (p *candidatePlan) Next() (account.RoutingCandidate, bool) {
 	if p == nil || p.Len() == 0 {
 		return account.RoutingCandidate{}, false
+	}
+	if p.sequential {
+		score := p.scores[0]
+		p.scores = p.scores[1:]
+		return p.values[score.index], true
 	}
 	score := heap.Pop(p).(candidateScore)
 	return p.values[score.index], true
@@ -116,11 +122,15 @@ func (s *Selector) planCandidates(ctx context.Context, values []account.RoutingC
 
 // planCandidateIndexes 在不可变候选快照上按下标规划，避免过滤阶段复制完整账号结构。
 // indexes 为 nil 时表示使用 values 的全部元素。
-func (s *Selector) planCandidateIndexes(ctx context.Context, values []account.RoutingCandidate, indexes []int, now time.Time, tierOrder []account.WebTier) (*candidatePlan, error) {
-	return s.planCandidateIndexesWithHints(ctx, values, indexes, now, tierOrder, nil, s.preferFreeBuildEnabled())
+func (s *Selector) planCandidateIndexes(ctx context.Context, values []account.RoutingCandidate, indexes []int, now time.Time, tierOrder []account.WebTier, sequential ...bool) (*candidatePlan, error) {
+	ordered := false
+	if len(sequential) > 0 {
+		ordered = sequential[0]
+	}
+	return s.planCandidateIndexesWithHints(ctx, values, indexes, now, tierOrder, nil, s.preferFreeBuildEnabled(), ordered)
 }
 
-func (s *Selector) planCandidateIndexesWithHints(ctx context.Context, values []account.RoutingCandidate, indexes []int, now time.Time, tierOrder []account.WebTier, concurrencyHints map[int]int, preferFreeBuild bool) (*candidatePlan, error) {
+func (s *Selector) planCandidateIndexesWithHints(ctx context.Context, values []account.RoutingCandidate, indexes []int, now time.Time, tierOrder []account.WebTier, concurrencyHints map[int]int, preferFreeBuild bool, sequential bool) (*candidatePlan, error) {
 	length := len(indexes)
 	if indexes == nil {
 		length = len(values)
@@ -210,8 +220,10 @@ func (s *Selector) planCandidateIndexesWithHints(ctx context.Context, values []a
 		scores = append(scores, score)
 	}
 	s.selectionMu.RUnlock()
-	plan := &candidatePlan{values: values, scores: scores}
-	heap.Init(plan)
+	plan := &candidatePlan{values: values, scores: scores, sequential: sequential}
+	if !sequential {
+		heap.Init(plan)
+	}
 	return plan, nil
 }
 

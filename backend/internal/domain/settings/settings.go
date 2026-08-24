@@ -99,13 +99,15 @@ type ProviderBuildConfig struct {
 
 // RoutingConfig 定义会话粘性、冷却和故障切换边界。
 type RoutingConfig struct {
-	StickyTTL       time.Duration
-	CooldownBase    time.Duration
-	CooldownMax     time.Duration
-	CapacityWait    time.Duration
+	StickyTTL        time.Duration
+	CooldownBase     time.Duration
+	CooldownMax      time.Duration
+	CapacityWait     time.Duration
 	MaxAttempts      int
 	VideoMaxAttempts int
 	PreferFreeBuild  bool
+	// ConsoleScheduling is optional so persisted payloads written by older releases keep the config.yaml value.
+	ConsoleScheduling *string
 	// MarkBuildChatDeniedAsReauth 为 true 时，Build chat 权限拒绝标 reauthRequired，默认 false 保留模型级冷却。
 	MarkBuildChatDeniedAsReauth bool
 	// AccountIsolatedConnections is optional so persisted payloads written by
@@ -152,7 +154,9 @@ type AccountsConfig struct {
 	AutoCleanIncludeDisabled bool
 }
 
-// ConsoleGuardConfig 定义 Console 账号降智防护开关；判定参数固定在网关代码里。
+// ConsoleGuardConfig 定义 Console 账号降智防护开关和 TPS 判定阈值。
 type ConsoleGuardConfig struct {
 	Enabled bool
+	SoftTPS float64
+	HardTPS float64
 }

@@ -254,7 +254,10 @@ func (session *selectionSession) acquireNormal(ctx context.Context, excluded map
 		}
 	}
 	indexes := session.unexcludedNormalIndexes(excluded)
-	activeRequest := session.selector.nextSegmentedActiveRequest(session.provider, session.upstreamModel, session.quotaMode, len(indexes))
+	var activeRequest *segmentedSelectorActiveRequest
+	if !session.selector.consoleSequentialEnabled(session.provider, session.quotaMode) {
+		activeRequest = session.selector.nextSegmentedActiveRequest(session.provider, session.upstreamModel, session.quotaMode, len(indexes))
+	}
 	if activeRequest != nil {
 		lease, err := session.selector.acquireSegmentedCandidates(ctx, session.values, indexes, session.quotaMode, session.selector.resolveTierOrder(session.provider, session.upstreamModel, session.quotaMode), *activeRequest)
 		if err != nil || lease == nil || session.stickyKey == "" {
@@ -270,7 +273,7 @@ func (session *selectionSession) acquireNormal(ctx context.Context, excluded map
 	deadline := time.Now().Add(capacityWait)
 	for {
 		if session.normalPlan == nil {
-			plan, err := session.selector.planCandidateIndexes(ctx, session.values, session.normalCandidates, time.Now().UTC(), session.selector.resolveTierOrder(session.provider, session.upstreamModel, session.quotaMode))
+			plan, err := session.selector.planCandidateIndexes(ctx, session.values, session.normalCandidates, time.Now().UTC(), session.selector.resolveTierOrder(session.provider, session.upstreamModel, session.quotaMode), session.selector.consoleSequentialEnabled(session.provider, session.quotaMode))
 			if err != nil {
 				return nil, err
 			}

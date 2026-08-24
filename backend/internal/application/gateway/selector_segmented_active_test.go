@@ -279,7 +279,7 @@ func TestSegmentedPlannerUsesOnePreferFreeBuildSnapshot(t *testing.T) {
 	}
 	selector := NewSelector(nil, memory.NewConcurrencyLimiter(), nil, nil, time.Hour, time.Second, time.Minute)
 	selector.UpdatePreferFreeBuild(true)
-	plan, err := selector.planCandidateIndexesWithHints(context.Background(), values, nil, now, nil, nil, false)
+	plan, err := selector.planCandidateIndexesWithHints(context.Background(), values, nil, now, nil, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +289,7 @@ func TestSegmentedPlannerUsesOnePreferFreeBuildSnapshot(t *testing.T) {
 	}
 
 	selector.UpdatePreferFreeBuild(false)
-	plan, err = selector.planCandidateIndexesWithHints(context.Background(), values, nil, now, nil, nil, true)
+	plan, err = selector.planCandidateIndexesWithHints(context.Background(), values, nil, now, nil, nil, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -64,17 +64,17 @@ class ClassificationTests(unittest.TestCase):
             "outputTokens": 1050, "reasoningTokens": 950,
         }, cfg)
         self.assertEqual((classification, reason, output), ("hard", "hard_tps", 1050))
-        self.assertEqual(speed, 1050)
+        self.assertEqual(speed, 2000)
 
-    def test_passive_late_first_token_uses_full_duration(self):
+    def test_passive_late_first_token_uses_tail_and_sums_tokens(self):
         cfg = config()
         classification, reason, speed, output = quality_guard.classify_audit({
             "provider": "grok_build", "streaming": True, "statusCode": 200,
             "firstTokenMs": 19763, "durationMs": 19827,
             "outputTokens": 1511, "reasoningTokens": 1471,
         }, cfg)
-        self.assertEqual((classification, reason, output), ("healthy", "within_threshold", 1511))
-        self.assertAlmostEqual(speed, 1511 * 1000 / 19827)
+        self.assertEqual((classification, reason, output), ("hard", "hard_tps", 1511))
+        self.assertAlmostEqual(speed, (1511 + 1471) * 1000 / 64)
 
     def test_passive_late_first_token_without_reasoning_remains_burst(self):
         cfg = config(fail_closed=True, min_generation_ms=1000)
@@ -95,7 +95,7 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(quality_guard.classify_audit({**base, "reasoningTokens": 0}, cfg)[:2], ("healthy", "within_threshold"))
         classification, reason, speed, _ = quality_guard.classify_audit({**base, "reasoningTokens": 80}, cfg)
         self.assertEqual((classification, reason), ("healthy", "within_threshold"))
-        self.assertAlmostEqual(speed, 100.0)
+        self.assertAlmostEqual(speed, 140.0)
         short = {**base, "outputTokens": 50, "reasoningTokens": 0, "durationMs": 2500}
         self.assertEqual(quality_guard.classify_audit(short, cfg)[:2], ("healthy", "within_threshold"))
         tiny = {**base, "outputTokens": 20, "reasoningTokens": 0, "durationMs": 2200}

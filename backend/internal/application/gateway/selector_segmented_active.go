@@ -65,7 +65,7 @@ func (s *Selector) acquireSegmentedCandidates(ctx context.Context, values []acco
 				length = len(values)
 			}
 			candidatesScanned += length
-			plan, err := s.planCandidateIndexesWithHints(ctx, values, indexes, now, tierOrder, nil, preferFreeBuild)
+			plan, err := s.planCandidateIndexesWithHints(ctx, values, indexes, now, tierOrder, nil, preferFreeBuild, false)
 			if err != nil {
 				observeSegmentedActive(request.provider, "error", "full_fallback", startedAt, windowsScanned, candidatesScanned)
 				return nil, err
@@ -94,7 +94,7 @@ func (s *Selector) acquireSegmentedCandidates(ctx context.Context, values []acco
 					windowsScanned++
 					roundWindows++
 					candidatesScanned += len(windowIndexes)
-					plan, err := s.planCandidateIndexesWithHints(ctx, values, windowIndexes, now, tierOrder, concurrencyHints, preferFreeBuild)
+					plan, err := s.planCandidateIndexesWithHints(ctx, values, windowIndexes, now, tierOrder, concurrencyHints, preferFreeBuild, false)
 					if err != nil {
 						observeSegmentedActive(request.provider, "error", "planning", startedAt, windowsScanned, candidatesScanned)
 						return nil, err
@@ -124,7 +124,7 @@ func (s *Selector) acquireSegmentedCandidates(ctx context.Context, values []acco
 					length = len(values)
 				}
 				candidatesScanned += length
-				plan, err := s.planCandidateIndexesWithHints(ctx, values, indexes, now, tierOrder, concurrencyHints, preferFreeBuild)
+				plan, err := s.planCandidateIndexesWithHints(ctx, values, indexes, now, tierOrder, concurrencyHints, preferFreeBuild, false)
 				if err != nil {
 					observeSegmentedActive(request.provider, "error", "full_fallback", startedAt, windowsScanned, candidatesScanned)
 					return nil, err
