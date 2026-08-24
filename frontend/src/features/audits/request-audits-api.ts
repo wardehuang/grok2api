@@ -191,6 +191,7 @@ type AuditQuery = {
   mode?: string;
   key?: string;
   account?: string;
+  errorCode?: string;
   period: AuditPeriod;
   sortBy?: string;
   sortOrder?: SortOrder;
@@ -205,6 +206,7 @@ export function getRequestAudits(input: AuditQuery, signal?: AbortSignal): Promi
   if (input.mode) query.set("mode", input.mode);
   if (input.key) query.set("key", input.key);
   if (input.account) query.set("account", input.account);
+  if (input.errorCode) query.set("errorCode", input.errorCode);
   if (input.sortBy && input.sortOrder) {
     query.set("sortBy", input.sortBy);
     query.set("sortOrder", input.sortOrder);

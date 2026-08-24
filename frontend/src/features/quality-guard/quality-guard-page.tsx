@@ -19,6 +19,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ConsoleGuardPanel } from "@/features/quality-guard/console-guard-panel";
 import { DegradeAccountsPanel } from "@/features/quality-guard/degrade-accounts-panel";
 import { ProbeProfilesPanel } from "@/features/quality-guard/probe-profiles-panel";
 import { getQualityGuardStatus, runQualityTest, updateQualityGuardPolicy, type QualityGuardEvent, type QualityGuardNodeState, type QualityGuardPolicy, type QualityGuardStatistics, type QualityGuardStatus, type QualityTestResult } from "@/features/quality-guard/quality-guard-api";
@@ -167,7 +168,11 @@ export function QualityGuardPage() {
           <TabsTrigger value="nodes">{t("qualityGuard.nodesTab")}</TabsTrigger>
           <TabsTrigger value="profiles">{t("qualityGuard.profilesTab")}</TabsTrigger>
           <TabsTrigger value="accounts">{t("qualityGuard.degrade.tab")}</TabsTrigger>
+          <TabsTrigger value="console">{t("qualityGuard.consoleGuard.tab")}</TabsTrigger>
         </TabsList>
+        <TabsContent value="console" className="mt-6">
+          <ConsoleGuardPanel />
+        </TabsContent>
         <TabsContent value="profiles" className="mt-6">
           <ProbeProfilesPanel />
         </TabsContent>

@@ -14,7 +14,6 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { EgressNodes } from "@/features/settings/egress-nodes";
-import { ConsoleGuardEvents } from "@/features/settings/console-guard-events";
 import { VersionUpdateSection } from "@/features/system/version-update";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isByteSizeUnit, isDurationUnit, MAX_ROUTING_ATTEMPTS, type ByteSizeValue, type DurationValue, UNLIMITED_ROUTING_ATTEMPTS } from "@/features/settings/settings-model";
@@ -360,22 +359,6 @@ export function SettingsPage() {
           </SettingsPane>
 
           <SettingsPane value="accounts">
-            <SettingsSection title={t("settings.accounts.consoleGuardTitle")}>
-              <div className="space-y-0">
-                <SettingsField controlId="console-guard-enabled" label={t("settings.accounts.consoleGuardEnabled")} description={t("settings.accounts.consoleGuardEnabledHelp")}>
-                  <Controller control={form.control} name="consoleGuard.enabled" render={({ field }) => (
-                    <div className="flex h-9 items-center">
-                      <Switch id="console-guard-enabled" checked={Boolean(field.value)} onCheckedChange={field.onChange} />
-                    </div>
-                  )} />
-                </SettingsField>
-              </div>
-            </SettingsSection>
-
-            <SettingsSection title={t("settings.accounts.consoleGuardEventsTitle")}>
-              <ConsoleGuardEvents />
-            </SettingsSection>
-
             <SettingsSection title={t("settings.accounts.invalidationTitle")}>
               <div className="space-y-0">
                 <SettingsField controlId="accounts-mark-build-forbidden-reauth" label={t("settingsBuildForbidden.markInvalid")} description={t("settingsBuildForbidden.markInvalidHelp")}>
