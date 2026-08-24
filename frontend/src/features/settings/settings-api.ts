@@ -39,6 +39,10 @@ export type SettingsConfigDTO = {
     enabled: boolean;
     softTPS: number;
     hardTPS: number;
+    firstTokenThresholdMS: number;
+    generationWindowThresholdMS: number;
+    minOutputReasoningTokens: number;
+    recordNonDegradedEvents: boolean;
   };
 };
 
@@ -154,6 +158,10 @@ const settingsConfigValidator = hasShape({
     enabled: isBoolean,
     softTPS: isOptional(isNumber),
     hardTPS: isOptional(isNumber),
+    firstTokenThresholdMS: isOptional(isNumber),
+    generationWindowThresholdMS: isOptional(isNumber),
+    minOutputReasoningTokens: isOptional(isNumber),
+    recordNonDegradedEvents: isOptional(isBoolean),
   })),
 });
 const defaultAccountsConfig = (): SettingsConfigDTO["accounts"] => ({
@@ -169,6 +177,10 @@ const defaultConsoleGuardConfig = (): SettingsConfigDTO["consoleGuard"] => ({
   enabled: false,
   softTPS: 500,
   hardTPS: 1000,
+  firstTokenThresholdMS: 5000,
+  generationWindowThresholdMS: 1250,
+  minOutputReasoningTokens: 300,
+  recordNonDegradedEvents: true,
 });
 function withSettingsDefaults(snapshot: SettingsSnapshotDTO): SettingsSnapshotDTO {
   const accounts = snapshot.config.accounts ?? defaultAccountsConfig();
@@ -214,6 +226,10 @@ function withSettingsDefaults(snapshot: SettingsSnapshotDTO): SettingsSnapshotDT
         enabled: consoleGuard.enabled ?? false,
         softTPS: consoleGuard.softTPS ?? 500,
         hardTPS: consoleGuard.hardTPS ?? 1000,
+        firstTokenThresholdMS: consoleGuard.firstTokenThresholdMS ?? 5000,
+        generationWindowThresholdMS: consoleGuard.generationWindowThresholdMS ?? 1250,
+        minOutputReasoningTokens: consoleGuard.minOutputReasoningTokens ?? 300,
+        recordNonDegradedEvents: consoleGuard.recordNonDegradedEvents ?? true,
       },
     },
   };

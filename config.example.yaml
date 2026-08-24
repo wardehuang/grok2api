@@ -166,9 +166,17 @@ qualityGuard:
 # Console 账号专用的降智防护（与 qualityGuard 完全独立）。
 # TPS=(output_tokens + reasoning_tokens)*1000/(duration_ms-first_token_ms)。
 # TPS 超过 hardTPS 直接判定降智；超过 softTPS 且没有真实 thinking 也判定降智。
+# 若 TPS 两项均未命中，再按慢首字 burst 判定：首字超过 firstTokenThresholdMS，
+# 首字后的生成窗口小于 generationWindowThresholdMS，且 output+reasoning 超过
+# minOutputReasoningTokens，三项同时满足才判定降智。
 # 只有真实 reasoning delta / encrypted_content 算思考；共试 5 个账号、恒 fail_closed；
 # 命中降智的 Console 账号会立即停用，需管理员手动恢复。
 consoleGuard:
   enabled: false
   softTPS: 500
   hardTPS: 1000
+  firstTokenThresholdMS: 5000
+  generationWindowThresholdMS: 1250
+  minOutputReasoningTokens: 300
+  # 默认记录未降智请求；关闭后仅保留实际命中降智的 Console 事件。
+  recordNonDegradedEvents: true

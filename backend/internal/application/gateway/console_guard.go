@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
@@ -23,7 +22,6 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/audit"
 	inferencedomain "github.com/chenyme/grok2api/backend/internal/domain/inference"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
-	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	neterrorpkg "github.com/chenyme/grok2api/backend/internal/pkg/neterror"
 )
 
@@ -38,10 +36,15 @@ var errConsoleGuardEmptyStream = errors.New("上游流式响应为空")
 
 // ConsoleGuardRuntime 是 console guard 的运行时配置。Zero Enabled 关闭防护。
 type ConsoleGuardRuntime struct {
-	Enabled     bool
-	HoldTimeout time.Duration
-	SoftTPS     float64
-	HardTPS     float64
+	Enabled                     bool
+	HoldTimeout                 time.Duration
+	SoftTPS                     float64
+	HardTPS                     float64
+	FirstTokenThresholdMS       int64
+	GenerationWindowThresholdMS int64
+	MinOutputReasoningTokens    int64
+	RecordNonDegradedEvents     bool
+	RecordNonDegradedEventsSet  bool
 }
 
 // ConsoleGuardSignals 是扣流判定输入。
@@ -94,6 +97,18 @@ func normalizeConsoleGuard(cfg ConsoleGuardRuntime) ConsoleGuardRuntime {
 	if cfg.HardTPS <= 0 {
 		cfg.HardTPS = audit.DefaultDegradeHardTPS
 	}
+	if cfg.FirstTokenThresholdMS <= 0 {
+		cfg.FirstTokenThresholdMS = 5000
+	}
+	if cfg.GenerationWindowThresholdMS <= 0 {
+		cfg.GenerationWindowThresholdMS = 1250
+	}
+	if cfg.MinOutputReasoningTokens <= 0 {
+		cfg.MinOutputReasoningTokens = 300
+	}
+	if !cfg.RecordNonDegradedEventsSet {
+		cfg.RecordNonDegradedEvents = true
+	}
 	return cfg
 }
 
@@ -112,26 +127,25 @@ func (s *Service) consoleGuardConfig() ConsoleGuardRuntime {
 	return normalizeConsoleGuard(ConsoleGuardRuntime{})
 }
 
-// ClassifyConsoleGuardHold 按 Console TPS 阈值决定扣住的流能否转发：
-// TPS 超过 hardTPS 无条件判定降智；TPS 超过 softTPS 且没有真实 thinking
-// 也判定降智。阈值未命中时，终止流或检测窗口到期后放行；空流交由
-// finishConsoleGuardPeek 继续按传输错误处理。
-func ClassifyConsoleGuardHold(sig ConsoleGuardSignals, softTPS, hardTPS float64) ConsoleGuardVerdict {
-	if softTPS <= 0 {
-		softTPS = audit.DefaultDegradeSoftTPS
-	}
-	if hardTPS <= 0 {
-		hardTPS = audit.DefaultDegradeHardTPS
-	}
+// ClassifyConsoleGuardHold 按 Console TPS 和慢首字 burst 阈值决定扣住的流能否转发：
+// TPS 超过 hardTPS 无条件判定降智；TPS 超过 softTPS 且没有真实 thinking 也判定降智。
+// 前两项未命中后，若首字慢、首字后的生成窗口短、输出与 reasoning token 同时超过阈值，
+// 仍判定降智。阈值未命中时，终止流或检测窗口到期后放行；空流交由 finishConsoleGuardPeek
+// 继续按传输错误处理。
+func ClassifyConsoleGuardHold(sig ConsoleGuardSignals, cfg ConsoleGuardRuntime) ConsoleGuardVerdict {
+	cfg = normalizeConsoleGuard(cfg)
 	tps := consoleGuardOutputTokensPerSecond(sig, Usage{})
-	if tps > hardTPS {
+	if tps > cfg.HardTPS {
+		return ConsoleGuardWithhold
+	}
+	if tps > cfg.SoftTPS && !sig.HasThinking {
+		return ConsoleGuardWithhold
+	}
+	if consoleGuardSlowFirstTokenBurst(sig, cfg) {
 		return ConsoleGuardWithhold
 	}
 	if sig.HasThinking {
 		return ConsoleGuardDeliver
-	}
-	if tps > softTPS {
-		return ConsoleGuardWithhold
 	}
 	if sig.Terminal {
 		if consoleGuardEffectiveOutputTokens(sig) <= 0 {
@@ -146,6 +160,16 @@ func ClassifyConsoleGuardHold(sig ConsoleGuardSignals, softTPS, hardTPS float64)
 		return ConsoleGuardDeliver
 	}
 	return ConsoleGuardWait
+}
+
+func consoleGuardSlowFirstTokenBurst(signals ConsoleGuardSignals, cfg ConsoleGuardRuntime) bool {
+	if !signals.FirstVisibleObserved {
+		return false
+	}
+	totalTokens := consoleGuardEffectiveOutputTokens(signals) + signals.ReasoningTokens
+	return signals.FirstVisibleMS > cfg.FirstTokenThresholdMS &&
+		consoleGuardGenerationWindowMS(signals) < cfg.GenerationWindowThresholdMS &&
+		totalTokens > cfg.MinOutputReasoningTokens
 }
 
 // consoleGuardPeekAbortError 优先返回 idle-timeout 原因而非裸 context.Canceled，
@@ -218,30 +242,42 @@ func CommitConsoleGuardHold(verdict ConsoleGuardVerdict, attemptIndex, maxAttemp
 	}
 }
 
-func shouldHoldConsoleGuardStream(input Input, ownership *inferencedomain.ResponseOwnership, route modeldomain.Route, operation audit.Operation, cfg ConsoleGuardRuntime) bool {
-	if !cfg.Enabled || !input.Streaming || input.ForcedEgressNodeID != 0 || ownership != nil || input.skipQualityHold {
-		return false
+func consoleGuardSkipReason(input Input, ownership *inferencedomain.ResponseOwnership, route modeldomain.Route, operation audit.Operation, cfg ConsoleGuardRuntime) string {
+	if !cfg.Enabled {
+		return "disabled"
+	}
+	if !input.Streaming {
+		return "non_streaming"
+	}
+	if input.ForcedEgressNodeID != 0 {
+		return "forced_egress"
+	}
+	if ownership != nil {
+		return "response_ownership"
+	}
+	if input.skipQualityHold {
+		return "gateway_skip_quality_hold"
 	}
 	switch operation {
 	case audit.OperationChat, audit.OperationResponses, audit.OperationMessages, "":
 	default:
-		return false
+		return "unsupported_operation"
 	}
 	if isResponsesCompactionRequest(input.Body) {
-		return false
+		return "responses_compaction"
 	}
 	// 仅 Console。
 	if route.Provider != accountdomain.ProviderConsole {
-		return false
+		return "non_console_provider"
 	}
 	// 显式关闭 reasoning 的请求不检测。
 	if consoleGuardRequestDisablesReasoning(input.Body) {
-		return false
+		return "reasoning_disabled"
 	}
-	if modeldomain.SupportsReasoningForProvider(route.Provider, input.PublicModel) {
-		return true
+	if modeldomain.SupportsReasoningForProvider(route.Provider, input.PublicModel) || modeldomain.SupportsReasoningForProvider(route.Provider, route.UpstreamModel) {
+		return ""
 	}
-	return modeldomain.SupportsReasoningForProvider(route.Provider, route.UpstreamModel)
+	return "model_no_reasoning_support"
 }
 
 func consoleGuardRequestDisablesReasoning(body []byte) bool {
@@ -286,32 +322,6 @@ func (s *Service) disableConsoleGuardAccount(ctx context.Context, requestID stri
 	s.logger.Info("console_guard_disabled", "request_id", requestID, "account_id", credential.ID, "account_name", credential.Name)
 }
 
-func (s *Service) recordConsoleGuardDegraded(ctx context.Context, base audit.Record, credential accountdomain.Credential, protocol string, usage Usage, signals ConsoleGuardSignals, cfg ConsoleGuardRuntime, commit ConsoleGuardCommit, attempt int, startedAt, responseStartedAt time.Time, trace *infraegress.Trace, provider accountdomain.Provider) {
-	record := base
-	record.EventID = newAuditEventID()
-	accountID := credential.ID
-	record.AccountID = &accountID
-	record.AccountName = credential.Name
-	record.StatusCode = http.StatusOK
-	record.ErrorCode = ConsoleGuardErrorCode
-	record.OutputTokens = usage.OutputTokens
-	record.ReasoningTokens = usage.ReasoningTokens
-	record.TotalTokens = usage.TotalTokens
-	record.InputTokens = usage.InputTokens
-	if usage.Reported {
-		record.UsageSource = audit.UsageSourceUpstream
-	}
-	record.DurationMS = time.Since(startedAt).Milliseconds()
-	record.CreatedAt = time.Now().UTC()
-	record.ConsoleGuard = buildConsoleGuardDetail(protocol, signals, usage, cfg, commit, attempt, time.Since(responseStartedAt).Milliseconds())
-	applyAuditEgress(&record, trace, provider)
-	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalizationTimeout)
-	defer cancel()
-	if err := s.audits.Create(writeCtx, record); err != nil {
-		s.logger.Error("console_guard_audit_failed", "event_id", record.EventID, "request_id", record.RequestID, "error", err)
-	}
-}
-
 func consoleGuardEffectiveOutputTokens(signals ConsoleGuardSignals) int64 {
 	return max(signals.OutputTokens, signals.VisibleTokens)
 }
@@ -333,12 +343,17 @@ func consoleGuardOutputTokensPerSecond(signals ConsoleGuardSignals, usage Usage)
 	return audit.OutputTokensPerSecond(outputTokens, reasoningTokens, consoleGuardFirstTokenMS(signals), signals.ObservationDurationMS)
 }
 
-func buildConsoleGuardDetail(protocol string, signals ConsoleGuardSignals, usage Usage, cfg ConsoleGuardRuntime, commit ConsoleGuardCommit, attempt int, upstreamDurationMS int64) *audit.ConsoleGuardDetail {
+func buildConsoleGuardAttemptDetail(protocol string, signals ConsoleGuardSignals, usage Usage, cfg ConsoleGuardRuntime, verdict ConsoleGuardVerdict, action ConsoleGuardAction, attempt int, upstreamDurationMS int64) *audit.ConsoleGuardAttemptDetail {
 	outputTokens := consoleGuardEffectiveOutputTokens(signals)
 	reasoningTokens := max(signals.ReasoningTokens, usage.ReasoningTokens)
 	generationWindowMS := consoleGuardGenerationWindowMS(signals)
 	outputTokensPerSecond := consoleGuardOutputTokensPerSecond(signals, usage)
-	decisionReasons := make([]audit.ConsoleGuardEvidence, 0, 8)
+	totalOutputReasoningTokens := outputTokens + reasoningTokens
+	hardTPSExceeded := outputTokensPerSecond > cfg.HardTPS
+	softTPSExceededWithoutThinking := outputTokensPerSecond > cfg.SoftTPS && !signals.HasThinking
+	burstConditionsMet := consoleGuardSlowFirstTokenBurst(signals, cfg)
+	slowFirstTokenBurst := !hardTPSExceeded && !softTPSExceededWithoutThinking && burstConditionsMet
+	decisionReasons := make([]audit.ConsoleGuardEvidence, 0, 12)
 	if signals.HasThinking {
 		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "real_thinking_present", Detail: "观察到真实 reasoning 内容；软阈值条件不会命中，但硬阈值仍独立判断"})
 	} else {
@@ -352,50 +367,108 @@ func buildConsoleGuardDetail(protocol string, signals ConsoleGuardSignals, usage
 	}
 	decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "tps_formula", Detail: fmt.Sprintf("Token/s=(output_tokens + reasoning_tokens)*1000/(duration_ms - first_token_ms)=(%d + %d)*1000/(%d - %d)=%.2f", outputTokens, reasoningTokens, signals.ObservationDurationMS, consoleGuardFirstTokenMS(signals), outputTokensPerSecond)})
 	decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "tps_thresholds", Detail: fmt.Sprintf("softTPS=%.2f, hardTPS=%.2f, currentTPS=%.2f", cfg.SoftTPS, cfg.HardTPS, outputTokensPerSecond)})
-	if outputTokensPerSecond > cfg.HardTPS {
+	if hardTPSExceeded {
 		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "hard_tps_exceeded", Detail: fmt.Sprintf("current TPS %.2f > hardTPS %.2f；无论是否有 thinking 都判定降智", outputTokensPerSecond, cfg.HardTPS)})
-	} else if outputTokensPerSecond > cfg.SoftTPS && !signals.HasThinking {
+	} else if softTPSExceededWithoutThinking {
 		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "soft_tps_exceeded_without_thinking", Detail: fmt.Sprintf("current TPS %.2f > softTPS %.2f 且 hasThinking=false，判定降智", outputTokensPerSecond, cfg.SoftTPS)})
+	} else if outputTokensPerSecond > cfg.SoftTPS && signals.HasThinking {
+		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "thinking_protected_by_soft_threshold", Detail: fmt.Sprintf("current TPS %.2f > softTPS %.2f 但存在真实 thinking，软阈值不触发降智；继续检查 burst 条件", outputTokensPerSecond, cfg.SoftTPS)})
+	} else {
+		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "tps_within_soft_threshold", Detail: fmt.Sprintf("current TPS %.2f 未超过 softTPS %.2f；没有达到降智速度条件", outputTokensPerSecond, cfg.SoftTPS)})
+	}
+	firstTokenMS := consoleGuardFirstTokenMS(signals)
+	firstTokenSlow := signals.FirstVisibleObserved && firstTokenMS > cfg.FirstTokenThresholdMS
+	generationWindowShort := generationWindowMS < cfg.GenerationWindowThresholdMS
+	tokenCountHigh := totalOutputReasoningTokens > cfg.MinOutputReasoningTokens
+	decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "slow_first_token_burst_conditions", Detail: fmt.Sprintf("firstTokenMs=%d > %dms=%t；generationWindowMs=%d < %dms=%t；output+reasoning=%d > %d=%t", firstTokenMS, cfg.FirstTokenThresholdMS, firstTokenSlow, generationWindowMS, cfg.GenerationWindowThresholdMS, generationWindowShort, totalOutputReasoningTokens, cfg.MinOutputReasoningTokens, tokenCountHigh)})
+	if hardTPSExceeded || softTPSExceededWithoutThinking {
+		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "slow_first_token_burst_not_evaluated", Detail: "TPS 判定已先命中，慢首字 burst 规则不作为本次最终判定"})
+	} else if slowFirstTokenBurst {
+		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "slow_first_token_burst_exceeded", Detail: "软 TPS 和硬 TPS 均未命中，但慢首字 + 短生成窗口 + 高 output/reasoning token 条件同时满足，判定降智"})
+	} else {
+		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "slow_first_token_burst_not_exceeded", Detail: "慢首字 burst 三项条件未同时满足，不因该规则判定降智"})
+	}
+	if outputTokens <= 0 {
+		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "no_effective_output_tokens", Detail: "尚未观察到有效输出 token；等待终止或扫描结果，不据此判定降智"})
 	}
 	if signals.Terminal {
 		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "terminal_observed", Detail: "已观察到终止事件：" + signals.TerminalEvent})
 	} else if signals.HoldExpired {
 		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "hold_timeout_reached", Detail: fmt.Sprintf("hold timeout=%dms 已到期", cfg.HoldTimeout.Milliseconds())})
 	}
-	decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "classified_withhold", Detail: "ClassifyConsoleGuardHold 判定为 withhold，扣住响应并进入降智处理"})
-	return &audit.ConsoleGuardDetail{
-		Protocol:               protocol,
-		Verdict:                string(ConsoleGuardWithhold),
-		Action:                 string(commit.Action),
-		Attempt:                attempt,
-		MaxAttempts:            consoleGuardMaxAttempts,
-		MinOutputTokens:        0,
-		SoftTPS:                cfg.SoftTPS,
-		HardTPS:                cfg.HardTPS,
-		HoldTimeoutMS:          cfg.HoldTimeout.Milliseconds(),
-		HasThinking:            signals.HasThinking,
-		ThinkingEvidence:       append([]audit.ConsoleGuardEvidence{}, signals.ThinkingEvidence...),
-		ReasoningStarted:       signals.ReasoningStarted,
-		ReasoningStartEvidence: append([]audit.ConsoleGuardEvidence{}, signals.ReasoningStartEvidence...),
-		VisibleRunes:           signals.VisibleRunes,
-		VisibleTokens:          signals.VisibleTokens,
-		OutputTokens:           outputTokens,
-		ReasoningTokens:        reasoningTokens,
-		UsageReported:          usage.Reported,
-		UsageInputTokens:       usage.InputTokens,
-		UsageOutputTokens:      usage.OutputTokens,
-		UsageReasoningTokens:   usage.ReasoningTokens,
-		UsageTotalTokens:       usage.TotalTokens,
-		Terminal:               signals.Terminal,
-		TerminalEvent:          signals.TerminalEvent,
-		HoldExpired:            signals.HoldExpired,
-		ObservationDurationMS:  signals.ObservationDurationMS,
-		UpstreamDurationMS:     upstreamDurationMS,
-		FirstVisibleObserved:   signals.FirstVisibleObserved,
-		FirstVisibleMS:         signals.FirstVisibleMS,
-		GenerationWindowMS:     generationWindowMS,
-		OutputTokensPerSecond:  outputTokensPerSecond,
-		AccountDisabled:        true,
-		DecisionReasons:        decisionReasons,
+	switch verdict {
+	case ConsoleGuardWithhold:
+		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "classified_withhold", Detail: "ClassifyConsoleGuardHold 判定为 withhold，扣住响应并进入降智处理"})
+	case ConsoleGuardDeliver:
+		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "classified_deliver", Detail: "ClassifyConsoleGuardHold 判定为 deliver，保留本次响应"})
+	default:
+		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "classified_wait", Detail: "ClassifyConsoleGuardHold 尚未完成最终判定"})
 	}
+	return &audit.ConsoleGuardAttemptDetail{
+		Protocol:                    protocol,
+		Verdict:                     string(verdict),
+		Action:                      string(action),
+		Attempt:                     attempt,
+		MaxAttempts:                 consoleGuardMaxAttempts,
+		MinOutputTokens:             0,
+		FirstTokenThresholdMS:       cfg.FirstTokenThresholdMS,
+		GenerationWindowThresholdMS: cfg.GenerationWindowThresholdMS,
+		MinOutputReasoningTokens:    cfg.MinOutputReasoningTokens,
+		SoftTPS:                     cfg.SoftTPS,
+		HardTPS:                     cfg.HardTPS,
+		HoldTimeoutMS:               cfg.HoldTimeout.Milliseconds(),
+		HasThinking:                 signals.HasThinking,
+		ThinkingEvidence:            append([]audit.ConsoleGuardEvidence{}, signals.ThinkingEvidence...),
+		ReasoningStarted:            signals.ReasoningStarted,
+		ReasoningStartEvidence:      append([]audit.ConsoleGuardEvidence{}, signals.ReasoningStartEvidence...),
+		VisibleRunes:                signals.VisibleRunes,
+		VisibleTokens:               signals.VisibleTokens,
+		OutputTokens:                outputTokens,
+		ReasoningTokens:             reasoningTokens,
+		UsageReported:               usage.Reported,
+		UsageInputTokens:            usage.InputTokens,
+		UsageOutputTokens:           usage.OutputTokens,
+		UsageReasoningTokens:        usage.ReasoningTokens,
+		UsageTotalTokens:            usage.TotalTokens,
+		Terminal:                    signals.Terminal,
+		TerminalEvent:               signals.TerminalEvent,
+		HoldExpired:                 signals.HoldExpired,
+		ObservationDurationMS:       signals.ObservationDurationMS,
+		UpstreamDurationMS:          upstreamDurationMS,
+		FirstVisibleObserved:        signals.FirstVisibleObserved,
+		FirstVisibleMS:              signals.FirstVisibleMS,
+		GenerationWindowMS:          generationWindowMS,
+		OutputTokensPerSecond:       outputTokensPerSecond,
+		AccountDisabled:             verdict == ConsoleGuardWithhold,
+		DecisionReasons:             decisionReasons,
+	}
+}
+
+func buildConsoleGuardDetail(protocol, skipReason string, cfg ConsoleGuardRuntime, attempts []audit.ConsoleGuardAttemptDetail, degraded bool) *audit.ConsoleGuardDetail {
+	if strings.TrimSpace(skipReason) == "" && len(attempts) == 0 {
+		skipReason = "request_not_forwarded"
+	}
+	detail := &audit.ConsoleGuardDetail{
+		Degraded:   degraded,
+		SkipReason: skipReason,
+		Attempts:   append([]audit.ConsoleGuardAttemptDetail(nil), attempts...),
+	}
+	if len(attempts) > 0 {
+		detail.ConsoleGuardAttemptDetail = attempts[len(attempts)-1]
+		return detail
+	}
+	detail.ConsoleGuardAttemptDetail = audit.ConsoleGuardAttemptDetail{
+		Protocol:      protocol,
+		Verdict:       "skipped",
+		Action:        string(ConsoleGuardActionDeliver),
+		MaxAttempts:   consoleGuardMaxAttempts,
+		SoftTPS:       cfg.SoftTPS,
+		HardTPS:       cfg.HardTPS,
+		HoldTimeoutMS: cfg.HoldTimeout.Milliseconds(),
+		DecisionReasons: []audit.ConsoleGuardEvidence{{
+			Code:   "guard_skipped",
+			Detail: "本次 Console 请求未进入流扫描：" + skipReason,
+		}},
+	}
+	return detail
 }

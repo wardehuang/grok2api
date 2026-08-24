@@ -413,13 +413,15 @@ type CursorResult struct {
 }
 
 type ListFilter struct {
-	Model     string
-	Status    string
-	Mode      string
-	Key       string
-	Account   string
-	ErrorCode string
-	Sort      repository.SortQuery
+	Provider         string
+	ConsoleGuardOnly bool
+	Model            string
+	Status           string
+	Mode             string
+	Key              string
+	Account          string
+	ErrorCode        string
+	Sort             repository.SortQuery
 }
 
 type auditCursorPayload struct {
@@ -448,7 +450,7 @@ func (s *Service) ListCursor(ctx context.Context, rawCursor string, pageSize int
 		return CursorResult{}, err
 	}
 	items, hasMore, err := s.audits.ListCursor(ctx, repository.AuditCursorQuery{Cursor: cursor, Limit: pageSize, Search: search, Start: start, End: end, Sort: filter.Sort, Filter: repository.AuditListFilter{
-		Model: filter.Model, Status: filter.Status, Mode: filter.Mode, Key: filter.Key, Account: filter.Account, ErrorCode: filter.ErrorCode,
+		Provider: filter.Provider, ConsoleGuardOnly: filter.ConsoleGuardOnly, Model: filter.Model, Status: filter.Status, Mode: filter.Mode, Key: filter.Key, Account: filter.Account, ErrorCode: filter.ErrorCode,
 	}})
 	if err != nil {
 		return CursorResult{}, err
@@ -578,7 +580,7 @@ func (s *Service) summary(ctx context.Context, search, rawPeriod string, filter 
 	if !useCache {
 		return s.loadSummary(ctx, search, filter, period, start, end)
 	}
-	cacheKey := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s", period, search, filter.Model, filter.Status, filter.Mode, filter.Key, filter.Account)
+	cacheKey := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%t", period, search, filter.Provider, filter.Model, filter.Status, filter.Mode, filter.Key, filter.Account, filter.ConsoleGuardOnly)
 	return s.summaryCache.Load(ctx, cacheKey, end, func() (SummaryResult, error) {
 		return s.loadSummary(ctx, search, filter, period, start, end)
 	})
@@ -586,7 +588,7 @@ func (s *Service) summary(ctx context.Context, search, rawPeriod string, filter 
 
 func (s *Service) loadSummary(ctx context.Context, search string, filter ListFilter, period Period, start, end time.Time) (SummaryResult, error) {
 	aggregate, err := s.audits.Summarize(ctx, repository.AuditSummaryQuery{Search: search, Start: start, End: end, Filter: repository.AuditListFilter{
-		Model: filter.Model, Status: filter.Status, Mode: filter.Mode, Key: filter.Key, Account: filter.Account,
+		Provider: filter.Provider, ConsoleGuardOnly: filter.ConsoleGuardOnly, Model: filter.Model, Status: filter.Status, Mode: filter.Mode, Key: filter.Key, Account: filter.Account, ErrorCode: filter.ErrorCode,
 	}})
 	if err != nil {
 		return SummaryResult{}, err

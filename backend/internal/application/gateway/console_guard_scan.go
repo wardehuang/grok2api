@@ -450,7 +450,7 @@ func peekConsoleGuardStream(ctx context.Context, body io.ReadCloser, protocol st
 	defer holdTimer.Stop()
 	for {
 		sig := state.signals()
-		if verdict := ClassifyConsoleGuardHold(sig, cfg.SoftTPS, cfg.HardTPS); verdict != ConsoleGuardWait {
+		if verdict := ClassifyConsoleGuardHold(sig, cfg); verdict != ConsoleGuardWait {
 			return newConsoleGuardPrefixReplay(&held, pump), verdict, state.usage, sig, nil
 		}
 		// 已 terminal 的空流必须立即轮换：在 response.completed / [DONE] 之后
@@ -465,7 +465,7 @@ func peekConsoleGuardStream(ctx context.Context, body io.ReadCloser, protocol st
 			return io.NopCloser(bytes.NewReader(held.Bytes())), ConsoleGuardWait, state.usage, sig, consoleGuardPeekAbortError(ctx, ctx.Err())
 		case <-holdTimer.C:
 			sig.HoldExpired = true
-			if verdict := ClassifyConsoleGuardHold(sig, cfg.SoftTPS, cfg.HardTPS); verdict != ConsoleGuardWait {
+			if verdict := ClassifyConsoleGuardHold(sig, cfg); verdict != ConsoleGuardWait {
 				return newConsoleGuardPrefixReplay(&held, pump), verdict, state.usage, sig, nil
 			}
 		case result, ok := <-pump.results:
@@ -504,7 +504,7 @@ func finishConsoleGuardPeek(held *bytes.Buffer, pump *consoleGuardReadPump, stat
 	if !signals.HasThinking && signals.ReasoningTokens <= 0 && signals.OutputTokens <= 0 && signals.VisibleTokens <= 0 {
 		return newConsoleGuardPrefixReplay(held, pump), ConsoleGuardWait, state.usage, signals, errConsoleGuardEmptyStream
 	}
-	return newConsoleGuardPrefixReplay(held, pump), ClassifyConsoleGuardHold(signals, cfg.SoftTPS, cfg.HardTPS), state.usage, signals, nil
+	return newConsoleGuardPrefixReplay(held, pump), ClassifyConsoleGuardHold(signals, cfg), state.usage, signals, nil
 }
 
 func newConsoleGuardPrefixReplay(held *bytes.Buffer, rest io.ReadCloser) io.ReadCloser {

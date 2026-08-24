@@ -134,11 +134,13 @@ type ClientKeyListQuery struct {
 }
 
 type AuditListFilter struct {
-	Model   string
-	Status  string
-	Mode    string
-	Key     string
-	Account string
+	Provider         string
+	ConsoleGuardOnly bool
+	Model            string
+	Status           string
+	Mode             string
+	Key              string
+	Account          string
 	// ErrorCode 精确匹配 error_code；用于按守护事件类型筛选审计。
 	ErrorCode string
 }

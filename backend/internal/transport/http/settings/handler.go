@@ -140,9 +140,13 @@ type accountsConfigDTO struct {
 }
 
 type consoleGuardConfigDTO struct {
-	Enabled *bool    `json:"enabled,omitempty"`
-	SoftTPS *float64 `json:"softTPS,omitempty"`
-	HardTPS *float64 `json:"hardTPS,omitempty"`
+	Enabled                     *bool    `json:"enabled,omitempty"`
+	SoftTPS                     *float64 `json:"softTPS,omitempty"`
+	HardTPS                     *float64 `json:"hardTPS,omitempty"`
+	FirstTokenThresholdMS       *int64   `json:"firstTokenThresholdMS,omitempty"`
+	GenerationWindowThresholdMS *int64   `json:"generationWindowThresholdMS,omitempty"`
+	MinOutputReasoningTokens    *int64   `json:"minOutputReasoningTokens,omitempty"`
+	RecordNonDegradedEvents     *bool    `json:"recordNonDegradedEvents,omitempty"`
 }
 
 type settingsResponse struct {
@@ -272,14 +276,22 @@ func (value settingsConfigDTO) toApplication() settingsapp.EditableConfig {
 	}
 	if value.ConsoleGuard != nil {
 		result.ConsoleGuard = settingsapp.ConsoleGuardConfig{
-			Enabled:         boolValue(value.ConsoleGuard.Enabled),
-			SoftTPS:         floatValue(value.ConsoleGuard.SoftTPS),
-			HardTPS:         floatValue(value.ConsoleGuard.HardTPS),
-			EnabledProvided: value.ConsoleGuard.Enabled != nil,
-			SoftTPSProvided: value.ConsoleGuard.SoftTPS != nil,
-			HardTPSProvided: value.ConsoleGuard.HardTPS != nil,
+			Enabled:                             boolValue(value.ConsoleGuard.Enabled),
+			SoftTPS:                             floatValue(value.ConsoleGuard.SoftTPS),
+			HardTPS:                             floatValue(value.ConsoleGuard.HardTPS),
+			FirstTokenThresholdMS:               int64Value(value.ConsoleGuard.FirstTokenThresholdMS),
+			GenerationWindowThresholdMS:         int64Value(value.ConsoleGuard.GenerationWindowThresholdMS),
+			MinOutputReasoningTokens:            int64Value(value.ConsoleGuard.MinOutputReasoningTokens),
+			EnabledProvided:                     value.ConsoleGuard.Enabled != nil,
+			SoftTPSProvided:                     value.ConsoleGuard.SoftTPS != nil,
+			HardTPSProvided:                     value.ConsoleGuard.HardTPS != nil,
+			FirstTokenThresholdMSProvided:       value.ConsoleGuard.FirstTokenThresholdMS != nil,
+			GenerationWindowThresholdMSProvided: value.ConsoleGuard.GenerationWindowThresholdMS != nil,
+			MinOutputReasoningTokensProvided:    value.ConsoleGuard.MinOutputReasoningTokens != nil,
+			RecordNonDegradedEvents:             boolValue(value.ConsoleGuard.RecordNonDegradedEvents),
+			RecordNonDegradedEventsProvided:     value.ConsoleGuard.RecordNonDegradedEvents != nil,
 		}
-		result.ConsoleGuardProvided = result.ConsoleGuard.EnabledProvided || result.ConsoleGuard.SoftTPSProvided || result.ConsoleGuard.HardTPSProvided
+		result.ConsoleGuardProvided = result.ConsoleGuard.EnabledProvided || result.ConsoleGuard.SoftTPSProvided || result.ConsoleGuard.HardTPSProvided || result.ConsoleGuard.FirstTokenThresholdMSProvided || result.ConsoleGuard.GenerationWindowThresholdMSProvided || result.ConsoleGuard.MinOutputReasoningTokensProvided || result.ConsoleGuard.RecordNonDegradedEventsProvided
 	}
 	return result
 }
@@ -352,7 +364,7 @@ func newSettingsResponse(value settingsapp.Snapshot) settingsResponse {
 				AutoCleanReauthMinAge:                config.Accounts.AutoCleanReauthMinAge,
 				AutoCleanIncludeDisabled:             config.Accounts.AutoCleanIncludeDisabled,
 			},
-			ConsoleGuard: &consoleGuardConfigDTO{Enabled: boolPointer(config.ConsoleGuard.Enabled), SoftTPS: floatPointer(config.ConsoleGuard.SoftTPS), HardTPS: floatPointer(config.ConsoleGuard.HardTPS)},
+			ConsoleGuard: &consoleGuardConfigDTO{Enabled: boolPointer(config.ConsoleGuard.Enabled), SoftTPS: floatPointer(config.ConsoleGuard.SoftTPS), HardTPS: floatPointer(config.ConsoleGuard.HardTPS), FirstTokenThresholdMS: int64Pointer(config.ConsoleGuard.FirstTokenThresholdMS), GenerationWindowThresholdMS: int64Pointer(config.ConsoleGuard.GenerationWindowThresholdMS), MinOutputReasoningTokens: int64Pointer(config.ConsoleGuard.MinOutputReasoningTokens), RecordNonDegradedEvents: boolPointer(config.ConsoleGuard.RecordNonDegradedEvents)},
 		},
 		RecommendedProviderBuild: providerBuildRecommendationDTO{
 			ClientVersion: value.RecommendedProviderBuild.ClientVersion,
@@ -375,6 +387,8 @@ func boolPointer(value bool) *bool { return &value }
 
 func floatPointer(value float64) *float64 { return &value }
 
+func int64Pointer(value int64) *int64 { return &value }
+
 func boolValue(value *bool) bool {
 	if value == nil {
 		return false
@@ -383,6 +397,13 @@ func boolValue(value *bool) bool {
 }
 
 func floatValue(value *float64) float64 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+func int64Value(value *int64) int64 {
 	if value == nil {
 		return 0
 	}

@@ -180,6 +180,10 @@ export const settingsSchema = z.object({
     enabled: z.boolean(),
     softTPS: z.number().min(1).max(10_000),
     hardTPS: z.number().min(1).max(10_000),
+    firstTokenThresholdMS: z.number().int().min(1),
+    generationWindowThresholdMS: z.number().int().min(1),
+    minOutputReasoningTokens: z.number().int().min(1),
+    recordNonDegradedEvents: z.boolean(),
   }).refine((value) => value.hardTPS > value.softTPS, { path: ["hardTPS"] }),
 });
 
@@ -231,6 +235,10 @@ export function toSettingsForm(config: SettingsConfigDTO): SettingsForm {
       enabled: config.consoleGuard.enabled,
       softTPS: config.consoleGuard.softTPS,
       hardTPS: config.consoleGuard.hardTPS,
+      firstTokenThresholdMS: config.consoleGuard.firstTokenThresholdMS,
+      generationWindowThresholdMS: config.consoleGuard.generationWindowThresholdMS,
+      minOutputReasoningTokens: config.consoleGuard.minOutputReasoningTokens,
+      recordNonDegradedEvents: config.consoleGuard.recordNonDegradedEvents,
     },
   };
 }
@@ -280,6 +288,10 @@ export function toSettingsDTO(config: SettingsForm): SettingsConfigDTO {
       enabled: config.consoleGuard.enabled,
       softTPS: config.consoleGuard.softTPS,
       hardTPS: config.consoleGuard.hardTPS,
+      firstTokenThresholdMS: config.consoleGuard.firstTokenThresholdMS,
+      generationWindowThresholdMS: config.consoleGuard.generationWindowThresholdMS,
+      minOutputReasoningTokens: config.consoleGuard.minOutputReasoningTokens,
+      recordNonDegradedEvents: config.consoleGuard.recordNonDegradedEvents,
     },
   };
 }

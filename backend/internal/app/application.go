@@ -505,7 +505,11 @@ func qualityRetryRuntime(value config.QualityGuardRequestRetryConfig) gateway.Qu
 }
 
 func consoleGuardRuntime(value config.ConsoleGuardConfig) gateway.ConsoleGuardRuntime {
-	return gateway.ConsoleGuardRuntime{Enabled: value.Enabled, SoftTPS: value.SoftTPS, HardTPS: value.HardTPS}
+	return gateway.ConsoleGuardRuntime{
+		Enabled: value.Enabled, SoftTPS: value.SoftTPS, HardTPS: value.HardTPS,
+		FirstTokenThresholdMS: value.FirstTokenThresholdMS, GenerationWindowThresholdMS: value.GenerationWindowThresholdMS, MinOutputReasoningTokens: value.MinOutputReasoningTokens,
+		RecordNonDegradedEvents: value.RecordNonDegradedEvents, RecordNonDegradedEventsSet: true,
+	}
 }
 
 func auditLedgerConfig(value config.AuditConfig) auditapp.LedgerConfig {

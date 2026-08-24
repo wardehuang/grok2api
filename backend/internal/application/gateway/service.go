@@ -945,12 +945,32 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 		Provider: string(route.Provider), Operation: auditOperation, UsageSource: audit.UsageSourceNone, Streaming: input.Streaming,
 		MediaInputImages: mediaSummary.InputImages,
 	}
+	consoleGuardCfg := s.consoleGuardConfig()
+	consoleGuardGateReason := consoleGuardSkipReason(input, ownership, route, operation, consoleGuardCfg)
+	consoleGuardEnabled := consoleGuardGateReason == ""
+	consoleGuardProtocol := consoleGuardProtocolForOperation(operation)
+	consoleGuardAttemptDetails := make([]audit.ConsoleGuardAttemptDetail, 0, consoleGuardMaxAttempts)
+	consoleGuardSawDegraded := false
+	consoleGuardRejected := false
+	consoleGuardAuditDetail := func() *audit.ConsoleGuardDetail {
+		if route.Provider != accountdomain.ProviderConsole {
+			return nil
+		}
+		return buildConsoleGuardDetail(consoleGuardProtocol, consoleGuardGateReason, consoleGuardCfg, consoleGuardAttemptDetails, consoleGuardSawDegraded)
+	}
+	attachConsoleGuardAudit := func(record *audit.Record) {
+		detail := consoleGuardAuditDetail()
+		if detail != nil && (detail.Degraded || consoleGuardCfg.RecordNonDegradedEvents) {
+			record.ConsoleGuard = detail
+		}
+	}
 	if errors.Is(routeErr, clientkeyapp.ErrModelNotAllowed) {
 		record := auditBase
 		record.StatusCode = http.StatusForbidden
 		record.DurationMS = time.Since(startedAt).Milliseconds()
 		record.ErrorCode = "model_not_allowed"
 		record.CreatedAt = time.Now().UTC()
+		attachConsoleGuardAudit(&record)
 		applyAuditEgress(&record, egressTrace, route.Provider)
 		if err := s.audits.Create(ctx, record); err != nil {
 			s.logger.Error("request_usage_write_failed", "event_id", record.EventID, "request_id", input.RequestID, "error", err)
@@ -1021,8 +1041,6 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 	authRecoveryAttempted := make(map[uint64]bool)
 	holdCfg := s.qualityRetryConfig()
 	qualityHoldEnabled := shouldHoldQualityStream(input, ownership, route, operation, holdCfg)
-	consoleGuardCfg := s.consoleGuardConfig()
-	consoleGuardEnabled := shouldHoldConsoleGuardStream(input, ownership, route, operation, consoleGuardCfg)
 	// Count accounts that actually reached the upstream. Credential-only skips
 	// do not consume the quality retry budget; refreshes stay on the same account.
 	qualityAccountAttempts := 0
@@ -1113,6 +1131,7 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 					record.Attempts = attempts
 				}
 				record.CreatedAt = now
+				attachConsoleGuardAudit(&record)
 				applyAuditEgress(&record, egressTrace, route.Provider)
 				if supportsStoredResponses && operation == audit.OperationResponses && responseID != "" && successful {
 					err := budget.run("response_ownership", finalizationOwnershipBudget, func(stageCtx context.Context) error {
@@ -1611,9 +1630,15 @@ attemptLoop:
 			}
 			if consoleGuardEnabled {
 				consoleGuardAttempts++
-				protocol := consoleGuardProtocolForOperation(operation)
-				replay, verdict, peekUsage, holdSignals, peekErr := peekConsoleGuardStream(ctx, response.Body, protocol, consoleGuardCfg)
+				replay, verdict, peekUsage, holdSignals, peekErr := peekConsoleGuardStream(ctx, response.Body, consoleGuardProtocol, consoleGuardCfg)
 				if peekErr != nil {
+					errorDetail := buildConsoleGuardAttemptDetail(consoleGuardProtocol, holdSignals, peekUsage, consoleGuardCfg, ConsoleGuardWait, ConsoleGuardActionRetry, consoleGuardAttempts, time.Since(responseStartedAt).Milliseconds())
+					errorDetail.Verdict = "error"
+					errorDetail.DecisionReasons = append(errorDetail.DecisionReasons, audit.ConsoleGuardEvidence{Code: "peek_error", Detail: "流扫描失败，未完成本次 Console Guard 判定"})
+					accountID := strconv.FormatUint(credential.ID, 10)
+					errorDetail.AccountID = accountID
+					errorDetail.AccountName = credential.Name
+					consoleGuardAttemptDetails = append(consoleGuardAttemptDetails, *errorDetail)
 					if replay != nil {
 						_ = replay.Close()
 					} else {
@@ -1648,50 +1673,17 @@ attemptLoop:
 				hasNextAccount := attemptPolicy.hasNext(attempt) && selection.hasAvailableCandidate(excluded, !quotaProbeAttempted)
 				hasNextAccount = hasNextAccount && consoleGuardAttempts < consoleGuardMaxAttempts
 				commit := CommitConsoleGuardHold(verdict, consoleGuardAttempts-1, consoleGuardMaxAttempts, hasNextAccount)
+				attemptDetail := buildConsoleGuardAttemptDetail(consoleGuardProtocol, holdSignals, peekUsage, consoleGuardCfg, verdict, commit.Action, consoleGuardAttempts, time.Since(responseStartedAt).Milliseconds())
+				accountID := strconv.FormatUint(credential.ID, 10)
+				attemptDetail.AccountID = accountID
+				attemptDetail.AccountName = credential.Name
+				consoleGuardAttemptDetails = append(consoleGuardAttemptDetails, *attemptDetail)
 				if verdict == ConsoleGuardWithhold {
+					consoleGuardSawDegraded = true
+					consoleGuardRejected = commit.Action == ConsoleGuardActionReject
 					s.disableConsoleGuardAccount(ctx, input.RequestID, credential)
-					s.logger.Warn("console_guard_withhold",
-						"request_id", input.RequestID,
-						"model", route.UpstreamModel,
-						"public_model", input.PublicModel,
-						"operation", string(operation),
-						"protocol", protocol,
-						"account_id", credential.ID,
-						"account_name", credential.Name,
-						"guard_attempt", consoleGuardAttempts,
-						"max_attempts", consoleGuardMaxAttempts,
-						"action", string(commit.Action),
-						"has_next_account", hasNextAccount,
-						"has_thinking", holdSignals.HasThinking,
-						"thinking_evidence", holdSignals.ThinkingEvidence,
-						"reasoning_started", holdSignals.ReasoningStarted,
-						"reasoning_start_evidence", holdSignals.ReasoningStartEvidence,
-						"visible_runes", holdSignals.VisibleRunes,
-						"visible_tokens", holdSignals.VisibleTokens,
-						"reasoning_tokens", holdSignals.ReasoningTokens,
-						"output_tokens", holdSignals.OutputTokens,
-						"soft_tps", consoleGuardCfg.SoftTPS,
-						"hard_tps", consoleGuardCfg.HardTPS,
-						"hold_timeout_ms", consoleGuardCfg.HoldTimeout.Milliseconds(),
-						"terminal", holdSignals.Terminal,
-						"terminal_event", holdSignals.TerminalEvent,
-						"hold_expired", holdSignals.HoldExpired,
-						"observation_duration_ms", holdSignals.ObservationDurationMS,
-						"first_visible_observed", holdSignals.FirstVisibleObserved,
-						"first_visible_ms", holdSignals.FirstVisibleMS,
-						"generation_window_ms", consoleGuardGenerationWindowMS(holdSignals),
-						"output_tokens_per_second", consoleGuardOutputTokensPerSecond(holdSignals, peekUsage),
-						"decision_reasons", buildConsoleGuardDetail(protocol, holdSignals, peekUsage, consoleGuardCfg, commit, consoleGuardAttempts, time.Since(responseStartedAt).Milliseconds()).DecisionReasons,
-						"usage_reported", peekUsage.Reported,
-						"usage_input_tokens", peekUsage.InputTokens,
-						"usage_output_tokens", peekUsage.OutputTokens,
-						"usage_reasoning_tokens", peekUsage.ReasoningTokens,
-						"usage_total_tokens", peekUsage.TotalTokens,
-						"upstream_duration_ms", time.Since(responseStartedAt).Milliseconds(),
-					)
 				}
 				if commit.Audit {
-					s.recordConsoleGuardDegraded(ctx, auditBase, credential, protocol, peekUsage, holdSignals, consoleGuardCfg, commit, consoleGuardAttempts, startedAt, responseStartedAt, egressTrace, route.Provider)
 					failureAttempts.captureQualityDegraded(credential, responseStartedAt)
 				}
 				switch commit.Action {
@@ -1709,7 +1701,7 @@ attemptLoop:
 						"model", route.UpstreamModel,
 						"public_model", input.PublicModel,
 						"operation", string(operation),
-						"protocol", protocol,
+						"protocol", consoleGuardProtocol,
 						"account_id", credential.ID,
 						"account_name", credential.Name,
 						"guard_attempt", consoleGuardAttempts,
@@ -1734,7 +1726,7 @@ attemptLoop:
 						"model", route.UpstreamModel,
 						"public_model", input.PublicModel,
 						"operation", string(operation),
-						"protocol", protocol,
+						"protocol", consoleGuardProtocol,
 						"account_id", credential.ID,
 						"account_name", credential.Name,
 						"guard_attempts_used", consoleGuardAttempts,
@@ -1791,8 +1783,12 @@ attemptLoop:
 		record.StatusCode = lastFailure.HTTPStatus
 		record.DurationMS = time.Since(startedAt).Milliseconds()
 		record.ErrorCode = lastFailure.AuditCode()
+		if consoleGuardRejected {
+			record.ErrorCode = ConsoleGuardErrorCode
+		}
 		record.Attempts = failureAttempts.snapshot()
 		record.CreatedAt = time.Now().UTC()
+		attachConsoleGuardAudit(&record)
 		applyAuditEgress(&record, egressTrace, route.Provider)
 		if lastFailure.AccountID != 0 {
 			accountID := lastFailure.AccountID
@@ -1820,6 +1816,7 @@ attemptLoop:
 	}
 	record.Attempts = failureAttempts.snapshot()
 	record.CreatedAt = time.Now().UTC()
+	attachConsoleGuardAudit(&record)
 	applyAuditEgress(&record, egressTrace, route.Provider)
 	persistCtx, cancel := context.WithTimeout(context.Background(), finalizationTimeout)
 	defer cancel()

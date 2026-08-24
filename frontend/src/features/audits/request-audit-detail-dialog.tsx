@@ -88,18 +88,43 @@ function ConsoleGuardDetail({ detail }: { detail: AuditConsoleGuardDetailDTO }) 
   const { t, i18n } = useTranslation();
   const metric = (value: number, suffix = "") => `${formatNumber(value, i18n.language)}${suffix}`;
   const threshold = (value: number | undefined) => value === undefined ? "-" : metric(value, " token/s");
+  const optionalMetric = (value: number | undefined, suffix = "") => value === undefined ? "-" : metric(value, suffix);
+  const degraded = detail.degraded ?? detail.verdict === "withhold";
+  const attemptDetails = detail.attempts && detail.attempts.length > 0 ? detail.attempts : [detail];
   return (
     <main className="min-h-0 flex-1 overflow-y-auto px-5 pb-5">
       <div className="space-y-5 py-3">
-        <section className="rounded-md border border-amber-500/30 bg-amber-500/5 p-4">
+        <section className={cn("rounded-md border p-4", degraded ? "border-amber-500/40 bg-amber-500/5" : "border-emerald-500/40 bg-emerald-500/5")}>
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="secondary" className="bg-amber-500/15 text-amber-700 dark:text-amber-300">{t("audits.consoleGuardTitle")}</Badge>
+            <Badge variant="secondary" className={degraded ? "bg-amber-500/15 text-amber-700 dark:text-amber-300" : "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"}>{t("audits.consoleGuardTitle")}</Badge>
+            <Badge variant="outline">{degraded ? t("qualityGuard.consoleGuard.degradedStatus") : t("qualityGuard.consoleGuard.normalStatus")}</Badge>
             <Badge variant="outline">{t("audits.consoleGuardDecision")}: {detail.verdict}</Badge>
             <Badge variant="outline">{t("audits.consoleGuardAction")}: {detail.action}</Badge>
           </div>
+          {detail.skipReason ? <p className="mt-3 text-sm text-muted-foreground">{t("audits.consoleGuardSkipReason")}: {detail.skipReason}</p> : null}
           <p className="mt-3 font-medium">{detail.hasThinking ? t("audits.consoleGuardThinkingDetected") : t("audits.consoleGuardThinkingMissing")}</p>
           <EvidenceList title={t("audits.consoleGuardDecisionReasons")} items={detail.decisionReasons} />
         </section>
+
+        {attemptDetails.length > 1 ? (
+          <section>
+            <h3 className="mb-3 font-medium">{t("audits.consoleGuardAttempts")}</h3>
+            <div className="space-y-3">
+              {attemptDetails.map((attempt) => (
+                <div key={`${attempt.attempt}-${attempt.accountId ?? "unknown"}`} className="rounded-md border bg-muted/15 p-3">
+                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                    <Badge variant="outline">#{attempt.attempt}</Badge>
+                    <span>{attempt.accountName || (attempt.accountId ? `#${attempt.accountId}` : "-")}</span>
+                    <Badge variant="outline">{attempt.verdict}</Badge>
+                    <Badge variant="outline">{attempt.action}</Badge>
+                    <span className="text-muted-foreground">{attempt.outputTokensPerSecond.toFixed(2)} token/s</span>
+                  </div>
+                  <EvidenceList title={t("audits.consoleGuardDecisionReasons")} items={attempt.decisionReasons} />
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
 
         <section>
           <h3 className="mb-3 font-medium">{t("audits.consoleGuardMetrics")}</h3>
@@ -108,6 +133,9 @@ function ConsoleGuardDetail({ detail }: { detail: AuditConsoleGuardDetailDTO }) 
             <OverviewField label={t("audits.consoleGuardAttempt")} value={`${detail.attempt} / ${detail.maxAttempts}`} />
             <OverviewField label={t("audits.consoleGuardSoftTPS")} value={threshold(detail.softTPS)} />
             <OverviewField label={t("audits.consoleGuardHardTPS")} value={threshold(detail.hardTPS)} />
+            <OverviewField label={t("audits.consoleGuardFirstTokenThreshold")} value={optionalMetric(detail.firstTokenThresholdMs, " ms")} />
+            <OverviewField label={t("audits.consoleGuardGenerationWindowThreshold")} value={optionalMetric(detail.generationWindowThresholdMs, " ms")} />
+            <OverviewField label={t("audits.consoleGuardMinOutputReasoningTokens")} value={optionalMetric(detail.minOutputReasoningTokens)} />
             <OverviewField label={t("audits.consoleGuardHoldTimeout")} value={metric(detail.holdTimeoutMs, " ms")} />
             <OverviewField label={t("audits.consoleGuardVisibleRunes")} value={metric(detail.visibleRunes)} />
             <OverviewField label={t("audits.consoleGuardVisibleTokens")} value={metric(detail.visibleTokens)} />

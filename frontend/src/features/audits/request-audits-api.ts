@@ -28,15 +28,20 @@ export type AuditConsoleGuardEvidenceDTO = {
   detail: string;
 };
 
-export type AuditConsoleGuardDetailDTO = {
+export type AuditConsoleGuardAttemptDTO = {
   protocol: string;
   verdict: string;
   action: string;
   attempt: number;
   maxAttempts: number;
+  accountId?: string;
+  accountName?: string;
   softTPS?: number;
   hardTPS?: number;
   minOutputTokens: number;
+  firstTokenThresholdMs?: number;
+  generationWindowThresholdMs?: number;
+  minOutputReasoningTokens?: number;
   holdTimeoutMs: number;
   hasThinking: boolean;
   thinkingEvidence: AuditConsoleGuardEvidenceDTO[];
@@ -62,6 +67,12 @@ export type AuditConsoleGuardDetailDTO = {
   outputTokensPerSecond: number;
   accountDisabled: boolean;
   decisionReasons: AuditConsoleGuardEvidenceDTO[];
+};
+
+export type AuditConsoleGuardDetailDTO = AuditConsoleGuardAttemptDTO & {
+  degraded?: boolean;
+  skipReason?: string;
+  attempts?: AuditConsoleGuardAttemptDTO[];
 };
 
 export type AuditDTO = {
@@ -183,10 +194,11 @@ const auditBillingValidator = hasShape({
   components: isArrayOf(auditBillingComponentValidator), totalInUsdTicks: isNumber,
 });
 const auditConsoleGuardEvidenceValidator = hasShape({ code: isString, detail: isString });
-const auditConsoleGuardValidator = hasShape({
+const auditConsoleGuardAttemptValidator = hasShape({
   protocol: isString, verdict: isString, action: isString, attempt: isNumber, maxAttempts: isNumber,
+  accountId: isOptional(isString), accountName: isOptional(isString),
   softTPS: isOptional(isNumber), hardTPS: isOptional(isNumber),
-  minOutputTokens: isNumber, holdTimeoutMs: isNumber, hasThinking: isBoolean,
+  minOutputTokens: isNumber, firstTokenThresholdMs: isOptional(isNumber), generationWindowThresholdMs: isOptional(isNumber), minOutputReasoningTokens: isOptional(isNumber), holdTimeoutMs: isNumber, hasThinking: isBoolean,
   thinkingEvidence: isArrayOf(auditConsoleGuardEvidenceValidator), reasoningStarted: isBoolean,
   reasoningStartEvidence: isArrayOf(auditConsoleGuardEvidenceValidator), visibleRunes: isNumber,
   visibleTokens: isNumber, outputTokens: isNumber, reasoningTokens: isNumber, usageReported: isBoolean,
@@ -195,6 +207,21 @@ const auditConsoleGuardValidator = hasShape({
   upstreamDurationMs: isNumber, firstVisibleObserved: isBoolean, firstVisibleMs: isNumber,
   generationWindowMs: isNumber, outputTokensPerSecond: isNumber, accountDisabled: isBoolean,
   decisionReasons: isArrayOf(auditConsoleGuardEvidenceValidator),
+});
+const auditConsoleGuardValidator = hasShape({
+  protocol: isString, verdict: isString, action: isString, attempt: isNumber, maxAttempts: isNumber,
+  accountId: isOptional(isString), accountName: isOptional(isString),
+  softTPS: isOptional(isNumber), hardTPS: isOptional(isNumber),
+  minOutputTokens: isNumber, firstTokenThresholdMs: isOptional(isNumber), generationWindowThresholdMs: isOptional(isNumber), minOutputReasoningTokens: isOptional(isNumber), holdTimeoutMs: isNumber, hasThinking: isBoolean,
+  thinkingEvidence: isArrayOf(auditConsoleGuardEvidenceValidator), reasoningStarted: isBoolean,
+  reasoningStartEvidence: isArrayOf(auditConsoleGuardEvidenceValidator), visibleRunes: isNumber,
+  visibleTokens: isNumber, outputTokens: isNumber, reasoningTokens: isNumber, usageReported: isBoolean,
+  usageInputTokens: isNumber, usageOutputTokens: isNumber, usageReasoningTokens: isNumber, usageTotalTokens: isNumber,
+  terminal: isBoolean, terminalEvent: isString, holdExpired: isBoolean, observationDurationMs: isNumber,
+  upstreamDurationMs: isNumber, firstVisibleObserved: isBoolean, firstVisibleMs: isNumber,
+  generationWindowMs: isNumber, outputTokensPerSecond: isNumber, accountDisabled: isBoolean,
+  decisionReasons: isArrayOf(auditConsoleGuardEvidenceValidator),
+  degraded: isOptional(isBoolean), skipReason: isOptional(isString), attempts: isOptional(isArrayOf(auditConsoleGuardAttemptValidator)),
 });
 const auditValidator = hasShape({
   id: isString, requestId: isString, clientKeyId: isString, clientKeyName: isOptional(isString), clientIp: isOptional(isString), modelRouteId: isString,
@@ -242,6 +269,8 @@ type AuditQuery = {
   cursor?: string;
   pageSize?: number;
   search?: string;
+  provider?: string;
+  consoleGuardOnly?: boolean;
   model?: string;
   status?: string;
   mode?: string;
@@ -257,6 +286,8 @@ export function getRequestAudits(input: AuditQuery, signal?: AbortSignal): Promi
   const query = new URLSearchParams({ pagination: "cursor", pageSize: String(input.pageSize ?? 50), period: input.period });
   if (input.cursor) query.set("cursor", input.cursor);
   if (input.search) query.set("search", input.search);
+  if (input.provider) query.set("provider", input.provider);
+  if (input.consoleGuardOnly) query.set("consoleGuardOnly", "1");
   if (input.model) query.set("model", input.model);
   if (input.status) query.set("status", input.status);
   if (input.mode) query.set("mode", input.mode);
@@ -273,6 +304,8 @@ export function getRequestAudits(input: AuditQuery, signal?: AbortSignal): Promi
 export function getRequestAuditSummary(input: Omit<AuditQuery, "cursor" | "pageSize">, refresh = false, signal?: AbortSignal): Promise<AuditSummaryDTO> {
   const query = new URLSearchParams({ period: input.period });
   if (input.search) query.set("search", input.search);
+  if (input.provider) query.set("provider", input.provider);
+  if (input.consoleGuardOnly) query.set("consoleGuardOnly", "1");
   if (input.model) query.set("model", input.model);
   if (input.status) query.set("status", input.status);
   if (input.mode) query.set("mode", input.mode);

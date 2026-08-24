@@ -302,11 +302,15 @@ type QualityGuardRequestRetryConfig struct {
 }
 
 // ConsoleGuardConfig 是 Console 账号专用的降智防护配置。
-// 判定参数（30s hold、5 个账号、fail_closed、命中即停用）固定在代码里；TPS 阈值可热更新。
+// 判定参数（30s hold、5 个账号、fail_closed、命中即停用）固定在代码里；TPS 和 burst 阈值可热更新。
 type ConsoleGuardConfig struct {
-	Enabled bool    `yaml:"enabled"`
-	SoftTPS float64 `yaml:"softTPS"`
-	HardTPS float64 `yaml:"hardTPS"`
+	Enabled                     bool    `yaml:"enabled"`
+	SoftTPS                     float64 `yaml:"softTPS"`
+	HardTPS                     float64 `yaml:"hardTPS"`
+	FirstTokenThresholdMS       int64   `yaml:"firstTokenThresholdMS"`
+	GenerationWindowThresholdMS int64   `yaml:"generationWindowThresholdMS"`
+	MinOutputReasoningTokens    int64   `yaml:"minOutputReasoningTokens"`
+	RecordNonDegradedEvents     bool    `yaml:"recordNonDegradedEvents"`
 }
 
 type ClientKeyDefaultsConfig struct {
@@ -801,6 +805,9 @@ func validateConsoleGuardConfig(value ConsoleGuardConfig) error {
 	if value.SoftTPS < 1 || value.HardTPS <= value.SoftTPS || value.HardTPS > 10000 {
 		return errors.New("consoleGuard TPS 阈值无效")
 	}
+	if value.FirstTokenThresholdMS < 1 || value.GenerationWindowThresholdMS < 1 || value.MinOutputReasoningTokens < 1 {
+		return errors.New("consoleGuard 复合判定阈值必须大于 0")
+	}
 	return nil
 }
 
@@ -964,6 +971,8 @@ func defaultConfig() Config {
 		},
 		ConsoleGuard: ConsoleGuardConfig{
 			SoftTPS: auditdomain.DefaultDegradeSoftTPS, HardTPS: auditdomain.DefaultDegradeHardTPS,
+			FirstTokenThresholdMS: 5000, GenerationWindowThresholdMS: 1250, MinOutputReasoningTokens: 300,
+			RecordNonDegradedEvents: true,
 		},
 		ClientKeyDefaults: ClientKeyDefaultsConfig{RPMLimit: clientkeydomain.DefaultRPMLimit, MaxConcurrent: clientkeydomain.DefaultMaxConcurrent},
 		Accounts: AccountsConfig{

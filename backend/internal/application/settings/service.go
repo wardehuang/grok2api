@@ -153,12 +153,20 @@ type AccountsConfig struct {
 
 // ConsoleGuardConfig 是管理接口使用的 Console 降智防护输入。
 type ConsoleGuardConfig struct {
-	Enabled         bool
-	SoftTPS         float64
-	HardTPS         float64
-	EnabledProvided bool
-	SoftTPSProvided bool
-	HardTPSProvided bool
+	Enabled                             bool
+	SoftTPS                             float64
+	HardTPS                             float64
+	FirstTokenThresholdMS               int64
+	GenerationWindowThresholdMS         int64
+	MinOutputReasoningTokens            int64
+	RecordNonDegradedEvents             bool
+	EnabledProvided                     bool
+	SoftTPSProvided                     bool
+	HardTPSProvided                     bool
+	FirstTokenThresholdMSProvided       bool
+	GenerationWindowThresholdMSProvided bool
+	MinOutputReasoningTokensProvided    bool
+	RecordNonDegradedEventsProvided     bool
 }
 
 // EditableConfig 聚合管理端允许修改的运行参数。
@@ -454,6 +462,18 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 	if value.ConsoleGuard.HardTPS > 0 {
 		base.ConsoleGuard.HardTPS = value.ConsoleGuard.HardTPS
 	}
+	if value.ConsoleGuard.FirstTokenThresholdMS > 0 {
+		base.ConsoleGuard.FirstTokenThresholdMS = value.ConsoleGuard.FirstTokenThresholdMS
+	}
+	if value.ConsoleGuard.GenerationWindowThresholdMS > 0 {
+		base.ConsoleGuard.GenerationWindowThresholdMS = value.ConsoleGuard.GenerationWindowThresholdMS
+	}
+	if value.ConsoleGuard.MinOutputReasoningTokens > 0 {
+		base.ConsoleGuard.MinOutputReasoningTokens = value.ConsoleGuard.MinOutputReasoningTokens
+	}
+	if value.ConsoleGuard.RecordNonDegradedEvents != nil {
+		base.ConsoleGuard.RecordNonDegradedEvents = *value.ConsoleGuard.RecordNonDegradedEvents
+	}
 	return base
 }
 
@@ -461,6 +481,7 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 	randomDelay := value.Batch.RandomDelay.Value()
 	accountIsolatedConnections := value.Routing.AccountIsolatedConnections
 	consoleSchedulingValue := value.Routing.ConsoleScheduling
+	recordNonDegradedEvents := value.ConsoleGuard.RecordNonDegradedEvents
 	return settingsdomain.Config{
 		Server: settingsdomain.ServerConfig{MaxConcurrentRequests: value.Server.MaxConcurrentRequests},
 		ProviderBuild: settingsdomain.ProviderBuildConfig{
@@ -525,7 +546,7 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 			AutoCleanReauthMinAge:                value.Accounts.AutoCleanReauthMinAge.Value(),
 			AutoCleanIncludeDisabled:             value.Accounts.AutoCleanIncludeDisabled,
 		},
-		ConsoleGuard: settingsdomain.ConsoleGuardConfig{Enabled: value.ConsoleGuard.Enabled, SoftTPS: value.ConsoleGuard.SoftTPS, HardTPS: value.ConsoleGuard.HardTPS},
+		ConsoleGuard: settingsdomain.ConsoleGuardConfig{Enabled: value.ConsoleGuard.Enabled, SoftTPS: value.ConsoleGuard.SoftTPS, HardTPS: value.ConsoleGuard.HardTPS, FirstTokenThresholdMS: value.ConsoleGuard.FirstTokenThresholdMS, GenerationWindowThresholdMS: value.ConsoleGuard.GenerationWindowThresholdMS, MinOutputReasoningTokens: value.ConsoleGuard.MinOutputReasoningTokens, RecordNonDegradedEvents: &recordNonDegradedEvents},
 	}
 }
 
@@ -632,6 +653,18 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 		}
 		if input.ConsoleGuard.HardTPSProvided {
 			next.ConsoleGuard.HardTPS = input.ConsoleGuard.HardTPS
+		}
+		if input.ConsoleGuard.FirstTokenThresholdMSProvided {
+			next.ConsoleGuard.FirstTokenThresholdMS = input.ConsoleGuard.FirstTokenThresholdMS
+		}
+		if input.ConsoleGuard.GenerationWindowThresholdMSProvided {
+			next.ConsoleGuard.GenerationWindowThresholdMS = input.ConsoleGuard.GenerationWindowThresholdMS
+		}
+		if input.ConsoleGuard.MinOutputReasoningTokensProvided {
+			next.ConsoleGuard.MinOutputReasoningTokens = input.ConsoleGuard.MinOutputReasoningTokens
+		}
+		if input.ConsoleGuard.RecordNonDegradedEventsProvided {
+			next.ConsoleGuard.RecordNonDegradedEvents = input.ConsoleGuard.RecordNonDegradedEvents
 		}
 	}
 
@@ -772,7 +805,7 @@ func toEditable(cfg config.Config) EditableConfig {
 			AutoCleanReauthMinAge:                        cfg.Accounts.AutoCleanReauthMinAge.String(),
 			AutoCleanIncludeDisabled:                     cfg.Accounts.AutoCleanIncludeDisabled,
 		},
-		ConsoleGuard:         ConsoleGuardConfig{Enabled: cfg.ConsoleGuard.Enabled, SoftTPS: cfg.ConsoleGuard.SoftTPS, HardTPS: cfg.ConsoleGuard.HardTPS, EnabledProvided: true, SoftTPSProvided: true, HardTPSProvided: true},
+		ConsoleGuard:         ConsoleGuardConfig{Enabled: cfg.ConsoleGuard.Enabled, SoftTPS: cfg.ConsoleGuard.SoftTPS, HardTPS: cfg.ConsoleGuard.HardTPS, FirstTokenThresholdMS: cfg.ConsoleGuard.FirstTokenThresholdMS, GenerationWindowThresholdMS: cfg.ConsoleGuard.GenerationWindowThresholdMS, MinOutputReasoningTokens: cfg.ConsoleGuard.MinOutputReasoningTokens, EnabledProvided: true, SoftTPSProvided: true, HardTPSProvided: true, FirstTokenThresholdMSProvided: true, GenerationWindowThresholdMSProvided: true, MinOutputReasoningTokensProvided: true},
 		ConsoleGuardProvided: true,
 		AccountsProvided:     true,
 	}

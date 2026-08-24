@@ -1026,6 +1026,12 @@ func applyAuditQuery(query *gorm.DB, search string, start, end time.Time, filter
 	if !end.IsZero() {
 		query = query.Where("created_at < ?", end)
 	}
+	if value := strings.TrimSpace(filter.Provider); value != "" {
+		query = query.Where("provider = ?", value)
+	}
+	if filter.ConsoleGuardOnly {
+		query = query.Where("console_guard_detail_json <> ''")
+	}
 	if value := strings.TrimSpace(filter.Model); value != "" {
 		query = query.Where("model_public_id = ? OR model_upstream_model = ?", value, value)
 	}

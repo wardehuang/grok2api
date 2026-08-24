@@ -46,43 +46,57 @@ type ConsoleGuardEvidence struct {
 	Detail string `json:"detail"`
 }
 
-// ConsoleGuardDetail 保存一次 Console 降智事件的完整判定快照。
+// ConsoleGuardAttemptDetail 保存一次 Console 流扫描的完整判定快照。
 // 不保存请求正文或响应正文，只保存流扫描器的统计与判定证据。
-type ConsoleGuardDetail struct {
+type ConsoleGuardAttemptDetail struct {
 	Protocol    string  `json:"protocol"`
 	Verdict     string  `json:"verdict"`
 	Action      string  `json:"action"`
 	Attempt     int     `json:"attempt"`
 	MaxAttempts int     `json:"maxAttempts"`
+	AccountID   string  `json:"accountId,omitempty"`
+	AccountName string  `json:"accountName,omitempty"`
 	SoftTPS     float64 `json:"softTPS"`
 	HardTPS     float64 `json:"hardTPS"`
 	// MinOutputTokens 保留旧审计快照兼容；Console Guard 新判定不再使用它。
-	MinOutputTokens        int64                  `json:"minOutputTokens"`
-	HoldTimeoutMS          int64                  `json:"holdTimeoutMs"`
-	HasThinking            bool                   `json:"hasThinking"`
-	ThinkingEvidence       []ConsoleGuardEvidence `json:"thinkingEvidence"`
-	ReasoningStarted       bool                   `json:"reasoningStarted"`
-	ReasoningStartEvidence []ConsoleGuardEvidence `json:"reasoningStartEvidence"`
-	VisibleRunes           int64                  `json:"visibleRunes"`
-	VisibleTokens          int64                  `json:"visibleTokens"`
-	OutputTokens           int64                  `json:"outputTokens"`
-	ReasoningTokens        int64                  `json:"reasoningTokens"`
-	UsageReported          bool                   `json:"usageReported"`
-	UsageInputTokens       int64                  `json:"usageInputTokens"`
-	UsageOutputTokens      int64                  `json:"usageOutputTokens"`
-	UsageReasoningTokens   int64                  `json:"usageReasoningTokens"`
-	UsageTotalTokens       int64                  `json:"usageTotalTokens"`
-	Terminal               bool                   `json:"terminal"`
-	TerminalEvent          string                 `json:"terminalEvent"`
-	HoldExpired            bool                   `json:"holdExpired"`
-	ObservationDurationMS  int64                  `json:"observationDurationMs"`
-	UpstreamDurationMS     int64                  `json:"upstreamDurationMs"`
-	FirstVisibleObserved   bool                   `json:"firstVisibleObserved"`
-	FirstVisibleMS         int64                  `json:"firstVisibleMs"`
-	GenerationWindowMS     int64                  `json:"generationWindowMs"`
-	OutputTokensPerSecond  float64                `json:"outputTokensPerSecond"`
-	AccountDisabled        bool                   `json:"accountDisabled"`
-	DecisionReasons        []ConsoleGuardEvidence `json:"decisionReasons"`
+	MinOutputTokens             int64                  `json:"minOutputTokens"`
+	FirstTokenThresholdMS       int64                  `json:"firstTokenThresholdMs"`
+	GenerationWindowThresholdMS int64                  `json:"generationWindowThresholdMs"`
+	MinOutputReasoningTokens    int64                  `json:"minOutputReasoningTokens"`
+	HoldTimeoutMS               int64                  `json:"holdTimeoutMs"`
+	HasThinking                 bool                   `json:"hasThinking"`
+	ThinkingEvidence            []ConsoleGuardEvidence `json:"thinkingEvidence"`
+	ReasoningStarted            bool                   `json:"reasoningStarted"`
+	ReasoningStartEvidence      []ConsoleGuardEvidence `json:"reasoningStartEvidence"`
+	VisibleRunes                int64                  `json:"visibleRunes"`
+	VisibleTokens               int64                  `json:"visibleTokens"`
+	OutputTokens                int64                  `json:"outputTokens"`
+	ReasoningTokens             int64                  `json:"reasoningTokens"`
+	UsageReported               bool                   `json:"usageReported"`
+	UsageInputTokens            int64                  `json:"usageInputTokens"`
+	UsageOutputTokens           int64                  `json:"usageOutputTokens"`
+	UsageReasoningTokens        int64                  `json:"usageReasoningTokens"`
+	UsageTotalTokens            int64                  `json:"usageTotalTokens"`
+	Terminal                    bool                   `json:"terminal"`
+	TerminalEvent               string                 `json:"terminalEvent"`
+	HoldExpired                 bool                   `json:"holdExpired"`
+	ObservationDurationMS       int64                  `json:"observationDurationMs"`
+	UpstreamDurationMS          int64                  `json:"upstreamDurationMs"`
+	FirstVisibleObserved        bool                   `json:"firstVisibleObserved"`
+	FirstVisibleMS              int64                  `json:"firstVisibleMs"`
+	GenerationWindowMS          int64                  `json:"generationWindowMs"`
+	OutputTokensPerSecond       float64                `json:"outputTokensPerSecond"`
+	AccountDisabled             bool                   `json:"accountDisabled"`
+	DecisionReasons             []ConsoleGuardEvidence `json:"decisionReasons"`
+}
+
+// ConsoleGuardDetail 是一条 Console 请求对应的唯一降智事件详情。
+// Attempts 保存本次请求的每次扫描；顶层字段是最后一次扫描的快照，保持旧审计详情兼容。
+type ConsoleGuardDetail struct {
+	ConsoleGuardAttemptDetail
+	Degraded   bool                        `json:"degraded"`
+	SkipReason string                      `json:"skipReason,omitempty"`
+	Attempts   []ConsoleGuardAttemptDetail `json:"attempts"`
 }
 
 // Attempt 保存一次失败尝试经过裁剪和脱敏的管理员诊断快照。
