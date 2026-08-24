@@ -215,6 +215,7 @@ type Service struct {
 	modelSyncing                map[uint64]struct{}
 	markBuildChatDeniedAsReauth atomic.Bool
 	qualityRetry                atomic.Pointer[QualityRetryRuntime]
+	consoleGuard                atomic.Pointer[ConsoleGuardRuntime]
 }
 
 type teamModelRateLimit struct {
@@ -1020,9 +1021,12 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 	authRecoveryAttempted := make(map[uint64]bool)
 	holdCfg := s.qualityRetryConfig()
 	qualityHoldEnabled := shouldHoldQualityStream(input, ownership, route, operation, holdCfg)
+	consoleGuardCfg := s.consoleGuardConfig()
+	consoleGuardEnabled := shouldHoldConsoleGuardStream(input, ownership, route, operation, consoleGuardCfg)
 	// Count accounts that actually reached the upstream. Credential-only skips
 	// do not consume the quality retry budget; refreshes stay on the same account.
 	qualityAccountAttempts := 0
+	consoleGuardAttempts := 0
 	quotaMode := s.providers.QuotaMode(route.Provider, route.UpstreamModel)
 	quotaProbeAttempted := false
 	selection := preselectedSession
@@ -1192,6 +1196,9 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 attemptLoop:
 	for attempt := 0; attemptPolicy.allows(attempt); attempt++ {
 		if qualityHoldEnabled && qualityAccountAttempts >= holdCfg.MaxAttempts {
+			break
+		}
+		if consoleGuardEnabled && consoleGuardAttempts >= consoleGuardMaxAttempts {
 			break
 		}
 		var lease *accountLease
@@ -1597,11 +1604,91 @@ attemptLoop:
 					discardFallback(true)
 				}
 				if !commit.KeepBody {
-					_ = response.Body.Close()
-					lease.Release()
-					break attemptLoop
+						_ = response.Body.Close()
+						lease.Release()
+						break attemptLoop
+					}
 				}
-			}
+				if consoleGuardEnabled {
+					consoleGuardAttempts++
+					replay, verdict, peekUsage, _, peekErr := peekConsoleGuardStream(ctx, response.Body, consoleGuardProtocolForOperation(operation), consoleGuardCfg)
+					if peekErr != nil {
+						if replay != nil {
+							_ = replay.Close()
+						} else {
+							_ = response.Body.Close()
+						}
+						lease.Release()
+						lastErr = peekErr
+						if isClientRequestCancel(ctx, peekErr) {
+							lastFailure = &UpstreamFailure{HTTPStatus: 499, Code: "request_canceled", PublicMessage: "请求已取消", AccountID: credential.ID, AccountName: credential.Name, Cause: firstError(ctx.Err(), peekErr)}
+							break
+						}
+						lastFailure = newTransportUpstreamFailure(peekErr, credential.ID, credential.Name)
+						if neterrorpkg.IsUpstreamStreamIdleTimeout(peekErr) || neterrorpkg.IsUpstreamStreamIdleTimeout(context.Cause(ctx)) || errors.Is(peekErr, errConsoleGuardEmptyStream) {
+							logPrefix := "console_guard_peek_idle"
+							if errors.Is(peekErr, errConsoleGuardEmptyStream) {
+								logPrefix = "console_guard_peek_empty"
+							}
+							writeCtx, writeCancel := context.WithTimeout(context.WithoutCancel(ctx), finalizationTimeout)
+							if markErr := s.selector.MarkFailureAfterSuccess(writeCtx, credential, http.StatusGatewayTimeout, qualityIdleAccountCooldown); markErr != nil {
+								s.logger.Warn(logPrefix+"_cooldown_failed", "request_id", input.RequestID, "account_id", credential.ID, "error", markErr)
+							} else {
+								s.logger.Warn(logPrefix+"_retry", "request_id", input.RequestID, "account_id", credential.ID, "cooldown", qualityIdleAccountCooldown)
+							}
+							writeCancel()
+						}
+						if shouldStopForNonAccountFingerprint(failureFingerprints, lastFailure) {
+							break
+						}
+						continue
+					}
+					response.Body = replay
+					hasNextAccount := attemptPolicy.hasNext(attempt) && selection.hasAvailableCandidate(excluded, !quotaProbeAttempted)
+					hasNextAccount = hasNextAccount && consoleGuardAttempts < consoleGuardMaxAttempts
+					commit := CommitConsoleGuardHold(verdict, consoleGuardAttempts-1, consoleGuardMaxAttempts, hasNextAccount)
+					if verdict == ConsoleGuardWithhold {
+						s.disableConsoleGuardAccount(ctx, input.RequestID, credential)
+					}
+					if commit.Audit {
+						s.recordConsoleGuardDegraded(ctx, auditBase, credential, peekUsage, startedAt, egressTrace, route.Provider)
+						failureAttempts.captureQualityDegraded(credential, responseStartedAt)
+					}
+					switch commit.Action {
+					case ConsoleGuardActionRetry:
+						_ = response.Body.Close()
+						lease.Release()
+						lastErr = errQualityDegraded
+						lastFailure = &UpstreamFailure{
+							HTTPStatus: http.StatusServiceUnavailable, Code: ErrorQualityDegraded,
+							PublicMessage: "上游响应缺少推理", AccountID: credential.ID, AccountName: credential.Name,
+							Cause: errQualityDegraded,
+						}
+						s.logger.Info("console_guard_retry", "request_id", input.RequestID, "account_id", credential.ID, "guard_attempt", consoleGuardAttempts, "output_tokens", peekUsage.OutputTokens)
+						continue
+					case ConsoleGuardActionReject:
+						_ = response.Body.Close()
+						lease.Release()
+						lastErr = errQualityDegraded
+						lastFailure = &UpstreamFailure{
+							HTTPStatus: http.StatusServiceUnavailable, Code: ErrorQualityDegraded,
+							PublicMessage: "上游响应缺少推理", AccountID: credential.ID, AccountName: credential.Name,
+							Cause: errQualityDegraded,
+						}
+						s.logger.Info("console_guard_rejected", "request_id", input.RequestID, "account_id", credential.ID)
+						break attemptLoop
+					case ConsoleGuardActionDeliverLast:
+						discardFallback(true)
+						s.logger.Info("console_guard_deliver_last", "request_id", input.RequestID, "account_id", credential.ID, "guard_attempt", consoleGuardAttempts, "output_tokens", peekUsage.OutputTokens)
+					case ConsoleGuardActionDeliver:
+						discardFallback(true)
+					}
+					if !commit.KeepBody {
+						_ = response.Body.Close()
+						lease.Release()
+						break attemptLoop
+					}
+				}
 			if diagnostic := response.RecoveredPrimaryFailure; diagnostic != nil {
 				recoveredFailure := newHTTPUpstreamFailure(diagnostic.StatusCode, diagnostic.Body, credential.ID, credential.Name)
 				if recoveredFailure.AccountBlocked || (credential.Provider == accountdomain.ProviderBuild && s.shouldInvalidateBuildForbidden(recoveredFailure)) {

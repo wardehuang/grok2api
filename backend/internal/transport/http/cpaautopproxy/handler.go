@@ -19,6 +19,7 @@ import (
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
+	"github.com/chenyme/grok2api/backend/internal/transport/http/cpaautopproxy/emailmatch"
 	"github.com/chenyme/grok2api/backend/internal/transport/http/middleware"
 	"github.com/gin-gonic/gin"
 )
@@ -51,6 +52,7 @@ func NewHandler(egressService *egressapp.Service, accountService *accountapp.Ser
 // Register mounts the local routes under an already authenticated admin group.
 func (handler *Handler) Register(router *gin.RouterGroup) {
 	router.POST("/cpa-auto-proxy/slots", handler.syncSlots)
+	router.POST("/cpa-auto-proxy/console-accounts/sync", handler.syncConsoleAccounts)
 }
 
 type slotRequest struct {
@@ -59,24 +61,28 @@ type slotRequest struct {
 	Accounts []string `json:"accounts"`
 }
 
+type consoleAccountsSyncRequest struct {
+	Emails *[]string `json:"emails"`
+}
+
 type slotResult struct {
-	Slot                 int      `json:"slot"`
-	Action               string   `json:"action"`
-	NodeName             string   `json:"nodeName"`
-	NodeID               string   `json:"nodeId,omitempty"`
-	WebNodeName          string   `json:"webNodeName"`
-	WebNodeID            string   `json:"webNodeId,omitempty"`
-	Assigned             int      `json:"assigned"`
-	ConsoleAssigned      int      `json:"consoleAssigned"`
-	WebAssigned          int      `json:"webAssigned"`
-	OverflowAssigned     int      `json:"overflowAssigned"`
-	ConsoleOverflowAssigned int  `json:"consoleOverflowAssigned"`
-	WebOverflowAssigned  int      `json:"webOverflowAssigned"`
-	OverflowAccounts     []string `json:"overflowAccounts"`
+	Slot                    int      `json:"slot"`
+	Action                  string   `json:"action"`
+	NodeName                string   `json:"nodeName"`
+	NodeID                  string   `json:"nodeId,omitempty"`
+	WebNodeName             string   `json:"webNodeName"`
+	WebNodeID               string   `json:"webNodeId,omitempty"`
+	Assigned                int      `json:"assigned"`
+	ConsoleAssigned         int      `json:"consoleAssigned"`
+	WebAssigned             int      `json:"webAssigned"`
+	OverflowAssigned        int      `json:"overflowAssigned"`
+	ConsoleOverflowAssigned int      `json:"consoleOverflowAssigned"`
+	WebOverflowAssigned     int      `json:"webOverflowAssigned"`
+	OverflowAccounts        []string `json:"overflowAccounts"`
 	ConsoleOverflowAccounts []string `json:"consoleOverflowAccounts"`
-	WebOverflowAccounts  []string `json:"webOverflowAccounts"`
-	SkippedAccounts      []string `json:"skippedAccounts"`
-	Error                string   `json:"error,omitempty"`
+	WebOverflowAccounts     []string `json:"webOverflowAccounts"`
+	SkippedAccounts         []string `json:"skippedAccounts"`
+	Error                   string   `json:"error,omitempty"`
 }
 
 func consoleNodeName(slot int) string {
@@ -214,6 +220,32 @@ func (handler *Handler) syncSlots(ginContext *gin.Context) {
 		"skipped_total", summary.skippedTotal,
 	)
 	response.Success(ginContext, http.StatusOK, gin.H{"results": results})
+}
+
+func (handler *Handler) syncConsoleAccounts(ginContext *gin.Context) {
+	var request consoleAccountsSyncRequest
+	if err := ginContext.ShouldBindJSON(&request); err != nil || request.Emails == nil {
+		response.Error(ginContext, http.StatusBadRequest, "invalidRequest", "请求参数无效，需要 emails 数组")
+		return
+	}
+
+	result, err := handler.accounts.SyncConsoleEnabledByEmails(ginContext.Request.Context(), *request.Emails)
+	if err != nil {
+		if errors.Is(err, accountapp.ErrInvalidInput) {
+			response.Error(ginContext, http.StatusBadRequest, "invalidRequest", err.Error())
+			return
+		}
+		requestID, _ := ginContext.Get(middleware.RequestIDKey)
+		handler.logger.Error("cpa_auto_proxy_console_account_sync_failed", "request_id", requestID, "error", err, "requested_email_count", len(*request.Emails))
+		response.Error(ginContext, http.StatusInternalServerError, "cpaAutoProxyConsoleAccountSyncFailed", "同步 Grok Console 账号状态失败")
+		return
+	}
+
+	response.Success(ginContext, http.StatusOK, gin.H{
+		"total":    result.Total,
+		"enabled":  result.Enabled,
+		"disabled": result.Disabled,
+	})
 }
 
 func (handler *Handler) logSlotReceived(log *slog.Logger, requestItem slotRequest) {
@@ -684,40 +716,10 @@ func emailIndexFromAccounts(accounts []accountRef) map[string][]uint64 {
 	return index
 }
 
-// emailMatchKeys returns lookup keys for an address. Gmail/Googlemail local-parts
-// ignore dots and +tags, so those variants collapse to one canonical key.
+// emailMatchKeys delegates to the shared package so slots and account state
+// sync use one identical matching implementation.
 func emailMatchKeys(rawEmail string) []string {
-	normalizedEmail := strings.ToLower(strings.TrimSpace(rawEmail))
-	if normalizedEmail == "" {
-		return nil
-	}
-	keys := []string{normalizedEmail}
-	if canonicalKey := gmailCanonicalEmail(normalizedEmail); canonicalKey != "" && canonicalKey != normalizedEmail {
-		keys = append(keys, canonicalKey)
-	}
-	return keys
-}
-
-func gmailCanonicalEmail(normalizedEmail string) string {
-	atIndex := strings.LastIndex(normalizedEmail, "@")
-	if atIndex <= 0 || atIndex == len(normalizedEmail)-1 {
-		return ""
-	}
-	localPart := normalizedEmail[:atIndex]
-	domain := normalizedEmail[atIndex+1:]
-	switch domain {
-	case "gmail.com", "googlemail.com":
-	default:
-		return ""
-	}
-	if plusIndex := strings.IndexByte(localPart, '+'); plusIndex >= 0 {
-		localPart = localPart[:plusIndex]
-	}
-	localPart = strings.ReplaceAll(localPart, ".", "")
-	if localPart == "" {
-		return ""
-	}
-	return localPart + "@gmail.com"
+	return emailmatch.MatchKeys(rawEmail)
 }
 
 type accountRef struct {

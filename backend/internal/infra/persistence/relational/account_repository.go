@@ -11,6 +11,7 @@ import (
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/media"
+	emailmatch "github.com/chenyme/grok2api/backend/internal/transport/http/cpaautopproxy/emailmatch"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -1586,6 +1587,94 @@ func (r *AccountRepository) UpdateMany(ctx context.Context, providerValue accoun
 		r.notifyInvalidation(ctx, repository.InvalidationEvent{Kind: repository.InvalidationAccountStateChanged})
 	}
 	return updated, nil
+}
+
+type providerEnabledSyncRow struct {
+	ID      uint64 `gorm:"column:id"`
+	Email   string `gorm:"column:email"`
+	Enabled bool   `gorm:"column:enabled"`
+}
+
+// SyncProviderEnabledByEmails changes only provider account state and returns
+// the accounts that transitioned to disabled so runtime sticky bindings can be
+// cleared by the application layer. Email matching reuses the slots endpoint's
+// multi-key index semantics: each side expands to all equivalent keys via
+// emailMatchKeys, so Gmail dot/plus variants and googlemail collapse to one key.
+func (r *AccountRepository) SyncProviderEnabledByEmails(ctx context.Context, providerValue account.Provider, emails []string) (repository.ProviderEnabledSyncResult, error) {
+	emailSet := make(map[string]struct{}, len(emails))
+	for _, email := range emails {
+		for _, matchKey := range emailmatch.MatchKeys(email) {
+			emailSet[matchKey] = struct{}{}
+		}
+	}
+
+	var result repository.ProviderEnabledSyncResult
+	var changed int
+	err := r.db.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var rows []providerEnabledSyncRow
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Model(&accountModel{}).
+			Select("id", "email", "enabled").
+			Where("provider = ?", providerValue).
+			Order("id ASC").
+			Find(&rows).Error; err != nil {
+			return err
+		}
+
+		enableIDs := make([]uint64, 0, len(rows))
+		disableIDs := make([]uint64, 0, len(rows))
+		result.Total = int64(len(rows))
+		for _, row := range rows {
+			shouldEnable := false
+			for _, matchKey := range emailmatch.MatchKeys(row.Email) {
+				if _, exists := emailSet[matchKey]; exists {
+					shouldEnable = true
+					break
+				}
+			}
+			if shouldEnable {
+				result.Enabled++
+			} else {
+				result.Disabled++
+			}
+			if row.Enabled == shouldEnable {
+				continue
+			}
+			if shouldEnable {
+				enableIDs = append(enableIDs, row.ID)
+			} else {
+				disableIDs = append(disableIDs, row.ID)
+			}
+		}
+
+		for start := 0; start < len(disableIDs); start += accountUpdateBatchSize {
+			end := min(start+accountUpdateBatchSize, len(disableIDs))
+			if err := tx.Model(&accountModel{}).
+				Where("provider = ? AND id IN ?", providerValue, disableIDs[start:end]).
+				Update("enabled", false).Error; err != nil {
+				return err
+			}
+		}
+		for start := 0; start < len(enableIDs); start += accountUpdateBatchSize {
+			end := min(start+accountUpdateBatchSize, len(enableIDs))
+			if err := tx.Model(&accountModel{}).
+				Where("provider = ? AND id IN ?", providerValue, enableIDs[start:end]).
+				Update("enabled", true).Error; err != nil {
+				return err
+			}
+		}
+
+		result.DisabledAccountIDs = disableIDs
+		changed = len(enableIDs) + len(disableIDs)
+		return nil
+	})
+	if err != nil {
+		return repository.ProviderEnabledSyncResult{}, err
+	}
+	if changed > 0 {
+		r.notifyInvalidation(ctx, repository.InvalidationEvent{Kind: repository.InvalidationAccountStateChanged})
+	}
+	return result, nil
 }
 
 // UpdateEgressBindings assigns one egress node to multiple accounts of one

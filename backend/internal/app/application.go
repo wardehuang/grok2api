@@ -353,6 +353,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	clientKeyRepo.SetInvalidationObserver(invalidationService.Notify)
 	gatewayService := gateway.NewService(modelService, auditService, accountService, clientKeyService, providers, selector, responseRepo, cfg.Routing.MaxAttempts)
 	gatewayService.UpdateQualityRetry(qualityRetryRuntime(cfg.QualityGuard.RequestRetry))
+	gatewayService.UpdateConsoleGuard(consoleGuardRuntime(cfg.ConsoleGuard))
 	gatewayService.UpdateVideoMaxAttempts(cfg.Routing.VideoMaxAttempts)
 	gatewayService.UpdateMarkBuildChatDeniedAsReauth(cfg.Routing.MarkBuildChatDeniedAsReauth)
 	gatewayService.SetLogger(logger)
@@ -410,6 +411,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 		reasoningReplay.UpdateConfig(reasoningreplay.Config{Enabled: next.Routing.ReasoningReplayEnabled, TTL: next.Routing.ReasoningReplayTTL.Value()})
 		gatewayService.UpdateMaxAttempts(next.Routing.MaxAttempts)
 		gatewayService.UpdateQualityRetry(qualityRetryRuntime(next.QualityGuard.RequestRetry))
+		gatewayService.UpdateConsoleGuard(consoleGuardRuntime(next.ConsoleGuard))
 		gatewayService.UpdateVideoMaxAttempts(next.Routing.VideoMaxAttempts)
 		gatewayService.UpdateMarkBuildChatDeniedAsReauth(next.Routing.MarkBuildChatDeniedAsReauth)
 		gatewayService.UpdateBuildForbiddenReauthPolicy(next.Accounts.MarkBuildForbiddenReauth, next.Accounts.BuildForbiddenReauthCodes)
@@ -498,6 +500,10 @@ func qualityRetryRuntime(value config.QualityGuardRequestRetryConfig) gateway.Qu
 		OnExhausted:     value.OnExhausted,
 		AccountCooldown: value.AccountCooldown.Value(),
 	}
+}
+
+func consoleGuardRuntime(value config.ConsoleGuardConfig) gateway.ConsoleGuardRuntime {
+	return gateway.ConsoleGuardRuntime{Enabled: value.Enabled}
 }
 
 func auditLedgerConfig(value config.AuditConfig) auditapp.LedgerConfig {

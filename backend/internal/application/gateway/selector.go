@@ -924,6 +924,26 @@ func isMissingThinkingStrike(lastError string) bool {
 	return lastError == lastErrorMissingThinking || lastError == lastErrorMissingThinkingDisabled
 }
 
+// disableConsoleGuardAccount 对降智命中的 Console 账号立即真停用：
+// Enabled=false + 健康标记 + 失效广播 + 候选缓存剔除 + sticky 清除。
+// 与 missing-thinking 的"冷却→再犯→停用"两段式不同，这里没有冷却概念，
+// 恢复只能由管理员手动启用。
+func (s *Selector) disableConsoleGuardAccount(ctx context.Context, credential account.Credential) error {
+	disabled := false
+	if _, err := s.accounts.UpdateMany(ctx, credential.Provider, []uint64{credential.ID}, repository.AccountUpdates{Enabled: &disabled}); err != nil {
+		return err
+	}
+	healthErr := s.accounts.UpdateHealth(ctx, credential.ID, credential.Provider, credential.FailureCount, nil, lastErrorConsoleGuardDisabled, false)
+	s.ApplyInvalidation(repository.InvalidationEvent{
+		Kind: repository.InvalidationAccountStateChanged, Provider: credential.Provider, AccountID: credential.ID,
+	})
+	s.evictCandidate(credential.Provider, credential.ID)
+	if s.sticky != nil {
+		_ = s.sticky.DeleteByAccount(ctx, credential.ID)
+	}
+	return healthErr
+}
+
 type missingThinkingPenaltyResult string
 
 const (

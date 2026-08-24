@@ -800,16 +800,66 @@ func (s *Service) BatchUpdate(ctx context.Context, providerValue accountdomain.P
 	if err != nil {
 		return 0, mapRepositoryError(err)
 	}
-	if input.Enabled != nil && !*input.Enabled && s.sticky != nil {
-		if batchDeleter, ok := s.sticky.(repository.StickySessionBatchDeleter); ok {
-			_ = batchDeleter.DeleteByAccounts(ctx, ids)
-		} else {
-			for _, id := range ids {
-				_ = s.sticky.DeleteByAccount(ctx, id)
-			}
-		}
+	if input.Enabled != nil && !*input.Enabled {
+		s.clearStickyAccounts(ctx, ids)
 	}
 	return updated, nil
+}
+
+// ConsoleAccountSyncResult reports the final Console account state after an
+// email-set synchronization.
+type ConsoleAccountSyncResult struct {
+	Total    int64
+	Enabled  int64
+	Disabled int64
+}
+
+// SyncConsoleEnabledByEmails enables Console accounts whose normalized email
+// is present in emails and disables every other Console account.
+func (s *Service) SyncConsoleEnabledByEmails(ctx context.Context, emails []string) (ConsoleAccountSyncResult, error) {
+	normalizedEmails, err := normalizeSyncEmails(emails, maxBatchUpdateAccounts)
+	if err != nil {
+		return ConsoleAccountSyncResult{}, err
+	}
+	result, err := s.accounts.SyncProviderEnabledByEmails(ctx, accountdomain.ProviderConsole, normalizedEmails)
+	if err != nil {
+		return ConsoleAccountSyncResult{}, mapRepositoryError(err)
+	}
+	s.clearStickyAccounts(ctx, result.DisabledAccountIDs)
+	return ConsoleAccountSyncResult{Total: result.Total, Enabled: result.Enabled, Disabled: result.Disabled}, nil
+}
+
+func (s *Service) clearStickyAccounts(ctx context.Context, ids []uint64) {
+	if s.sticky == nil || len(ids) == 0 {
+		return
+	}
+	if batchDeleter, ok := s.sticky.(repository.StickySessionBatchDeleter); ok {
+		_ = batchDeleter.DeleteByAccounts(ctx, ids)
+		return
+	}
+	for _, id := range ids {
+		_ = s.sticky.DeleteByAccount(ctx, id)
+	}
+}
+
+func normalizeSyncEmails(emails []string, limit int) ([]string, error) {
+	if len(emails) > limit {
+		return nil, invalidInput(fmt.Sprintf("邮箱数量不能超过 %d", limit))
+	}
+	normalized := make([]string, 0, len(emails))
+	seen := make(map[string]struct{}, len(emails))
+	for index, email := range emails {
+		email = strings.ToLower(strings.TrimSpace(email))
+		if email == "" {
+			return nil, invalidInput(fmt.Sprintf("emails[%d] 不能为空", index))
+		}
+		if _, exists := seen[email]; exists {
+			continue
+		}
+		seen[email] = struct{}{}
+		normalized = append(normalized, email)
+	}
+	return normalized, nil
 }
 
 // AccountDeleteResult summarizes a single/batch delete with optional linked peers.

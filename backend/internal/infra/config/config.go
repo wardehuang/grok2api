@@ -68,6 +68,7 @@ type Config struct {
 	Routing           RoutingConfig           `yaml:"routing"`
 	Audit             AuditConfig             `yaml:"audit"`
 	QualityGuard      QualityGuardConfig      `yaml:"qualityGuard"`
+	ConsoleGuard      ConsoleGuardConfig      `yaml:"consoleGuard"`
 	ClientKeyDefaults ClientKeyDefaultsConfig `yaml:"clientKeyDefaults"`
 	Accounts          AccountsConfig          `yaml:"-"`
 }
@@ -294,6 +295,12 @@ type QualityGuardRequestRetryConfig struct {
 	MinOutputTokens int      `yaml:"minOutputTokens"`
 	OnExhausted     string   `yaml:"onExhausted"`
 	AccountCooldown Duration `yaml:"accountCooldown"`
+}
+
+// ConsoleGuardConfig 是 Console 账号专用的降智防护开关。
+// 判定参数（30s hold、8 token 阈值、5 个账号、fail_closed、命中即停用）固定在代码里。
+type ConsoleGuardConfig struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 type ClientKeyDefaultsConfig struct {
