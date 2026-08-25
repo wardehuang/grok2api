@@ -37,6 +37,8 @@ const (
 
 var errConsoleGuardEmptyStream = errors.New("上游流式响应为空")
 
+const consoleGuardUpstreamClientClosedStatus = 499
+
 // ConsoleGuardRuntime 是 console guard 的运行时配置。Zero Enabled 关闭防护。
 type ConsoleGuardRuntime struct {
 	Enabled                     bool

@@ -1464,6 +1464,67 @@ attemptLoop:
 				response.Body = io.NopCloser(bytes.NewReader(body))
 			}
 		}
+		if consoleGuardEnabled && response.StatusCode == consoleGuardUpstreamClientClosedStatus {
+			consoleGuardAttempts++
+			holdSignals := ConsoleGuardSignals{
+				ObservationDurationMS: time.Since(responseStartedAt).Milliseconds(),
+				TerminalEvent:         "upstream_http_499",
+			}
+			hasNextAccount := attemptPolicy.hasNext(attempt) && selection.hasAvailableCandidate(excluded, !quotaProbeAttempted)
+			hasNextAccount = hasNextAccount && consoleGuardAttempts < consoleGuardMaxAttempts
+			commit := CommitConsoleGuardHold(ConsoleGuardWithhold, consoleGuardAttempts-1, consoleGuardMaxAttempts, hasNextAccount)
+			attemptDetail := buildConsoleGuardAttemptDetail(consoleGuardProtocol, holdSignals, Usage{}, consoleGuardCfg, ConsoleGuardWithhold, commit.Action, consoleGuardAttempts, time.Since(responseStartedAt).Milliseconds())
+			attemptDetail.AccountID = strconv.FormatUint(credential.ID, 10)
+			attemptDetail.AccountName = credential.Name
+			attemptDetail.DecisionReasons = append(attemptDetail.DecisionReasons, audit.ConsoleGuardEvidence{Code: "upstream_http_499", Detail: "上游返回 HTTP 499，按 Console Guard 降智响应扣流并换号"})
+			consoleGuardAttemptDetails = append(consoleGuardAttemptDetails, *attemptDetail)
+			consoleGuardSawDegraded = true
+			consoleGuardRejected = commit.Action == ConsoleGuardActionReject
+			recordConsoleGuardDegraded(credential, Usage{}, *attemptDetail)
+			s.disableConsoleGuardAccount(ctx, input.RequestID, credential)
+			if commit.Audit {
+				failureAttempts.captureQualityDegraded(credential, responseStartedAt)
+			}
+			_ = response.Body.Close()
+			lease.Release()
+			lastErr = errQualityDegraded
+			lastFailure = &UpstreamFailure{
+				HTTPStatus: http.StatusServiceUnavailable, Code: ErrorQualityDegraded,
+				PublicMessage: "上游响应异常，已切换 Console 账号", AccountID: credential.ID, AccountName: credential.Name,
+				Cause: errQualityDegraded,
+			}
+			switch commit.Action {
+			case ConsoleGuardActionRetry:
+				s.logger.Warn("console_guard_retry",
+					"request_id", input.RequestID,
+					"model", route.UpstreamModel,
+					"public_model", input.PublicModel,
+					"operation", string(operation),
+					"protocol", consoleGuardProtocol,
+					"reason", "upstream_http_499",
+					"account_id", credential.ID,
+					"account_name", credential.Name,
+					"guard_attempt", consoleGuardAttempts,
+					"max_attempts", consoleGuardMaxAttempts,
+					"upstream_duration_ms", time.Since(responseStartedAt).Milliseconds(),
+				)
+				continue
+			case ConsoleGuardActionReject:
+				s.logger.Warn("console_guard_rejected",
+					"request_id", input.RequestID,
+					"model", route.UpstreamModel,
+					"public_model", input.PublicModel,
+					"operation", string(operation),
+					"protocol", consoleGuardProtocol,
+					"reason", "upstream_http_499",
+					"account_id", credential.ID,
+					"account_name", credential.Name,
+					"guard_attempts_used", consoleGuardAttempts,
+					"max_attempts", consoleGuardMaxAttempts,
+				)
+				break attemptLoop
+			}
+		}
 		if isTerminalRequestForbidden(credential.Provider, lastFailure) {
 			// already prepared as a terminal 403 response for the client
 		} else if isRetryableResponse(response, route.Provider) && !finalEgressForbidden {
