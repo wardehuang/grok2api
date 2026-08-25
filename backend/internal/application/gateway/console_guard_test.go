@@ -31,8 +31,12 @@ var consoleGuardTestCfg = ConsoleGuardRuntime{Enabled: true, SoftTPS: consoleGua
 
 func TestClassifyConsoleGuardHold(t *testing.T) {
 	t.Parallel()
-	if ClassifyConsoleGuardHold(ConsoleGuardSignals{HasThinking: true}, consoleGuardTestCfg) != ConsoleGuardDeliver {
-		t.Fatal("thinking must deliver")
+	if got := ClassifyConsoleGuardHold(ConsoleGuardSignals{HasThinking: true}, consoleGuardTestCfg); got != ConsoleGuardWait {
+		t.Fatalf("thinking without terminal must keep scanning, got %s", got)
+	}
+	hardTPSWithThinking := ConsoleGuardSignals{HasThinking: true, FirstVisibleObserved: true, FirstVisibleMS: 1, ObservationDurationMS: 2, OutputTokens: 2}
+	if got := ClassifyConsoleGuardHold(hardTPSWithThinking, consoleGuardTestCfg); got != ConsoleGuardWithhold {
+		t.Fatalf("hard TPS must withhold even with thinking, got %s", got)
 	}
 	if ClassifyConsoleGuardHold(ConsoleGuardSignals{ReasoningTokens: 60, OutputTokens: 90, ObservationDurationMS: 50}, consoleGuardTestCfg) != ConsoleGuardWithhold {
 		t.Fatal("usage-only reasoning with no streamed thinking must withhold")

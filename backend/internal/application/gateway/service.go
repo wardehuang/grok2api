@@ -965,6 +965,41 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 			record.ConsoleGuard = detail
 		}
 	}
+	recordConsoleGuardDegraded := func(credential accountdomain.Credential, usage Usage, attemptDetail audit.ConsoleGuardAttemptDetail) {
+		record := auditBase
+		record.EventID = newAuditEventID()
+		accountID := credential.ID
+		record.AccountID = &accountID
+		record.AccountName = credential.Name
+		record.StatusCode = http.StatusOK
+		record.ErrorCode = ConsoleGuardErrorCode
+		record.InputTokens = usage.InputTokens
+		record.CachedInputTokens = usage.CachedInputTokens
+		record.OutputTokens = usage.OutputTokens
+		record.ReasoningTokens = usage.ReasoningTokens
+		record.TotalTokens = usage.TotalTokens
+		record.CostInUSDTicks = usage.CostInUSDTicks
+		record.NumSourcesUsed = usage.NumSourcesUsed
+		record.NumServerSideToolsUsed = usage.NumServerSideToolsUsed
+		record.ContextInputTokens = usage.ContextInputTokens
+		record.ContextOutputTokens = usage.ContextOutputTokens
+		if usage.Reported {
+			record.UsageSource = usageSource
+		}
+		record.DurationMS = attemptDetail.UpstreamDurationMS
+		if attemptDetail.FirstVisibleObserved {
+			firstTokenMS := attemptDetail.FirstVisibleMS
+			record.FirstTokenMS = &firstTokenMS
+		}
+		record.CreatedAt = time.Now().UTC()
+		attachConsoleGuardAudit(&record)
+		applyAuditEgress(&record, egressTrace, route.Provider)
+		writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalizationTimeout)
+		defer cancel()
+		if err := s.audits.Create(writeCtx, record); err != nil {
+			s.logger.Error("console_guard_degraded_audit_failed", "event_id", record.EventID, "request_id", record.RequestID, "account_id", credential.ID, "error", err)
+		}
+	}
 	if errors.Is(routeErr, clientkeyapp.ErrModelNotAllowed) {
 		record := auditBase
 		record.StatusCode = http.StatusForbidden
@@ -1698,6 +1733,7 @@ attemptLoop:
 				if verdict == ConsoleGuardWithhold {
 					consoleGuardSawDegraded = true
 					consoleGuardRejected = commit.Action == ConsoleGuardActionReject
+					recordConsoleGuardDegraded(credential, peekUsage, *attemptDetail)
 					s.disableConsoleGuardAccount(ctx, input.RequestID, credential)
 				}
 				if commit.Audit {

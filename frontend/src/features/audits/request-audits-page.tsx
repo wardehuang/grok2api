@@ -689,6 +689,7 @@ function AuditStatus({ audit, onOpen }: { audit: AuditDTO; onOpen: () => void })
   const { t } = useTranslation();
   const mode = audit.operation === "compaction" ? t("audits.operations.compaction") : audit.streaming ? t("audits.stream") : t("audits.nonStream");
   const hasError = Boolean(audit.errorCode);
+  const isDegraded = audit.errorCode === "console_guard_degraded" || audit.errorCode === "quality_degraded";
   // 保留真实 HTTP 状态，同时明确标识 2xx 响应头之后发生的流式失败。
   // statusCode 0 仅兼容曾运行过早期实现的开发数据库。
   const showErrorLabel = hasError && (audit.statusCode === 0 || (audit.statusCode >= 200 && audit.statusCode < 300));
@@ -697,7 +698,7 @@ function AuditStatus({ audit, onOpen }: { audit: AuditDTO; onOpen: () => void })
       {showErrorLabel ? (
         <span className="inline-flex items-center gap-1 text-[10px] leading-4 tabular-nums text-amber-700 dark:text-amber-300">
           <span className="size-1.5 rounded-full bg-amber-500" />
-          {audit.statusCode > 0 ? `${audit.statusCode} · ` : ""}{t("audits.errorLabel")}
+          {audit.statusCode > 0 ? `${audit.statusCode} · ` : ""}{t(isDegraded ? "audits.degradedLabel" : "audits.errorLabel")}
         </span>
       ) : (
         <StatusCode statusCode={audit.statusCode} hasError={hasError} />

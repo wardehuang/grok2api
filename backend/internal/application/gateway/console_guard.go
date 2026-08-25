@@ -159,9 +159,6 @@ func ClassifyConsoleGuardHold(sig ConsoleGuardSignals, cfg ConsoleGuardRuntime) 
 	if consoleGuardSlowFirstTokenBurst(sig, cfg) {
 		return ConsoleGuardWithhold
 	}
-	if sig.HasThinking {
-		return ConsoleGuardDeliver
-	}
 	if sig.Terminal {
 		if consoleGuardEffectiveOutputTokens(sig) <= 0 {
 			return ConsoleGuardWait
@@ -331,11 +328,14 @@ func (s *Service) disableConsoleGuardAccount(ctx context.Context, requestID stri
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalizationTimeout)
 	defer cancel()
 	if s.consoleGuardProxyURLResolver != nil {
+		// ProxyURL 返回数据库中代理地址的解密原文；AppendUnique 原样写入明文文件。
 		proxyURL, err := s.consoleGuardProxyURLResolver.ProxyURL(writeCtx, credential.EgressNodeID)
 		if err != nil {
 			s.logger.Warn("console_guard_proxy_file_resolve_failed", "request_id", requestID, "account_id", credential.ID, "egress_node_id", credential.EgressNodeID, "error", err)
 		} else if err := consoleguardfile.AppendUnique(s.consoleGuardConfig().DegradedEgressNodeFilePath, proxyURL); err != nil {
 			s.logger.Error("console_guard_proxy_file_write_failed", "request_id", requestID, "account_id", credential.ID, "egress_node_id", credential.EgressNodeID, "error", err)
+		} else {
+			s.logger.Info("console_guard_proxy_file_written", "request_id", requestID, "account_id", credential.ID, "egress_node_id", credential.EgressNodeID, "path", s.consoleGuardConfig().DegradedEgressNodeFilePath, "proxy_url_bytes", len(proxyURL))
 		}
 	}
 	if err := s.selector.disableConsoleGuardAccount(writeCtx, credential); err != nil {
@@ -400,6 +400,9 @@ func buildConsoleGuardAttemptDetail(protocol string, signals ConsoleGuardSignals
 	}
 	decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "tps_formula", Detail: fmt.Sprintf("Token/s=(output_tokens + reasoning_tokens)*1000/(duration_ms - first_token_ms)=(%d + %d)*1000/(%d - %d)=%.2f", outputTokens, reasoningTokens, signals.ObservationDurationMS, consoleGuardFirstTokenMS(signals), outputTokensPerSecond)})
 	decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "tps_thresholds", Detail: fmt.Sprintf("softTPS=%.2f, hardTPS=%.2f, currentTPS=%.2f", cfg.SoftTPS, cfg.HardTPS, outputTokensPerSecond)})
+	if generationWindowMS <= 0 && totalOutputReasoningTokens > 0 {
+		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "tps_generation_window_non_positive", Detail: fmt.Sprintf("TPS 分母 duration_ms - first_token_ms = %d - %d <= 0；本次 attempt 在首个可见内容出现后尚未观察到可计量的生成窗口，因此 TPS 保持 0", signals.ObservationDurationMS, consoleGuardFirstTokenMS(signals))})
+	}
 	if hardTPSExceeded {
 		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "hard_tps_exceeded", Detail: fmt.Sprintf("current TPS %.2f > hardTPS %.2f；无论是否有 thinking 都判定降智", outputTokensPerSecond, cfg.HardTPS)})
 	} else if softTPSExceededWithoutThinking {

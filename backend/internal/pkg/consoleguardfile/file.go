@@ -13,7 +13,7 @@ const DefaultPath = "/app/data/console-degraded-egress-nodes.txt"
 
 var fileMu sync.Mutex
 
-// AppendUnique appends one non-empty proxy address unless the file already contains it.
+// AppendUnique appends one non-empty plaintext proxy address verbatim unless the file already contains it.
 func AppendUnique(path, value string) error {
 	path = strings.TrimSpace(path)
 	value = strings.TrimSpace(value)
