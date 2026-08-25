@@ -73,9 +73,13 @@ export function ConsoleGuardPanel() {
     },
     onSuccess: (snapshot) => {
       queryClient.setQueryData(["settings"], snapshot);
+      setRecordNonDegradedEvents(snapshot.config.consoleGuard.recordNonDegradedEvents);
       toast.success(t("qualityGuard.consoleGuard.saved"));
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : t("qualityGuard.consoleGuard.saveFailed")),
+    onError: (error) => {
+      setRecordNonDegradedEvents(settingsQuery.data!.config.consoleGuard.recordNonDegradedEvents);
+      toast.error(error instanceof Error ? error.message : t("qualityGuard.consoleGuard.saveFailed"));
+    },
   });
   const proxyFilePathMutation = useMutation({
     mutationFn: () => {
@@ -146,7 +150,10 @@ export function ConsoleGuardPanel() {
             <Switch
               checked={recordNonDegradedEvents}
               disabled={recordEventsMutation.isPending}
-              onCheckedChange={(checked) => recordEventsMutation.mutate(checked)}
+              onCheckedChange={(checked) => {
+                setRecordNonDegradedEvents(checked);
+                recordEventsMutation.mutate(checked);
+              }}
               aria-label={t("qualityGuard.consoleGuard.recordNonDegradedEvents")}
             />
           </div>
