@@ -29,6 +29,14 @@ type AccountUpsertResult struct {
 	Created bool
 }
 
+// ProviderAccountReference is the minimal account projection needed for
+// provider-scoped email-to-ID lookups.
+type ProviderAccountReference struct {
+	ID    uint64
+	Name  string
+	Email string
+}
+
 // BuildBotFlagCredential is the minimal encrypted credential projection used to
 // rebuild persisted Build bot-risk metadata outside the request path.
 type BuildBotFlagCredential struct {
@@ -101,6 +109,7 @@ type RoutingLayerRepository interface {
 // AccountRepository 定义 OAuth 账号和额度快照持久化能力。
 type AccountRepository interface {
 	List(ctx context.Context, query AccountListQuery) ([]account.Credential, int64, error)
+	ListProviderAccountReferences(ctx context.Context, provider account.Provider) ([]ProviderAccountReference, error)
 	// ListProviderAccountBatch 以 ID 游标取一批账号；total 仅在 afterID 为 0 时返回。
 	ListProviderAccountBatch(ctx context.Context, provider account.Provider, afterID uint64, limit int) ([]account.Credential, int64, error)
 	Summarize(ctx context.Context, now time.Time) ([]AccountSummary, error)

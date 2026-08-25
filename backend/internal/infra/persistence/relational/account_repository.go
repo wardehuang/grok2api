@@ -179,6 +179,30 @@ func (r *AccountRepository) List(ctx context.Context, input repository.AccountLi
 	return out, total, nil
 }
 
+func (r *AccountRepository) ListProviderAccountReferences(ctx context.Context, providerValue account.Provider) ([]repository.ProviderAccountReference, error) {
+	var rows []struct {
+		ID    uint64 `gorm:"column:id"`
+		Name  string `gorm:"column:name"`
+		Email string `gorm:"column:email"`
+	}
+	if err := r.db.db.WithContext(ctx).Model(&accountModel{}).
+		Select("id, name, email").
+		Where("provider = ?", providerValue).
+		Order("id ASC").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	references := make([]repository.ProviderAccountReference, 0, len(rows))
+	for _, row := range rows {
+		references = append(references, repository.ProviderAccountReference{
+			ID:    row.ID,
+			Name:  row.Name,
+			Email: row.Email,
+		})
+	}
+	return references, nil
+}
+
 func (r *AccountRepository) ListProviderAccountBatch(ctx context.Context, providerValue account.Provider, afterID uint64, limit int) ([]account.Credential, int64, error) {
 	if limit < 1 {
 		return []account.Credential{}, 0, nil

@@ -153,6 +153,9 @@ func TestObserveConsoleGuardChunkRealThinkingDelivers(t *testing.T) {
 		`data: {"type":"response.output_text.delta","delta":"hello hello hello hello hello hello hello hello"}`,
 	)))
 	encSig := encrypted.signals()
+	if !encSig.FirstVisibleObserved {
+		t.Fatalf("generated reasoning item must establish the main-audit first token: %#v", encSig)
+	}
 	if !encSig.HasThinking {
 		t.Fatalf("encrypted reasoning item must count as thinking: %#v", encSig)
 	}
@@ -185,7 +188,7 @@ func TestPeekConsoleGuardStreamThinkingDeliversRemainder(t *testing.T) {
 		`data: {"choices":[{"delta":{"content":"answer after think"}}]}`,
 		"data: [DONE]",
 	)))
-	replay, verdict, _, _, err := peekConsoleGuardStream(context.Background(), body, consoleGuardProtocolChat, consoleGuardTestCfg)
+	replay, verdict, _, _, err := peekConsoleGuardStream(context.Background(), body, consoleGuardProtocolChat, consoleGuardTestCfg, time.Now().Add(-50*time.Millisecond))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +210,7 @@ func TestPeekConsoleGuardStreamWithholdsNoThinkEnough(t *testing.T) {
 		`data: {"usage":{"completion_tokens":40,"completion_tokens_details":{"reasoning_tokens":0}}}`,
 		"data: [DONE]",
 	)))
-	replay, verdict, usage, _, err := peekConsoleGuardStream(context.Background(), body, consoleGuardProtocolChat, consoleGuardTestCfg)
+	replay, verdict, usage, _, err := peekConsoleGuardStream(context.Background(), body, consoleGuardProtocolChat, consoleGuardTestCfg, time.Now().Add(-50*time.Millisecond))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,6 +233,7 @@ func TestPeekConsoleGuardStreamEmptyCompletedRetriesWithoutIdle(t *testing.T) {
 		))),
 		consoleGuardProtocolResponses,
 		consoleGuardTestCfg,
+		time.Now().Add(-50*time.Millisecond),
 	)
 	if replay != nil {
 		defer replay.Close()
@@ -260,7 +264,7 @@ func TestPeekConsoleGuardStreamHoldTimeoutEmptyDoesNotFailOpen(t *testing.T) {
 			SoftTPS:     consoleGuardTestSoftTPS,
 			HardTPS:     consoleGuardTestHardTPS,
 			HoldTimeout: 20 * time.Millisecond,
-		})
+		}, time.Now().Add(-50*time.Millisecond))
 	}()
 	select {
 	case <-done:

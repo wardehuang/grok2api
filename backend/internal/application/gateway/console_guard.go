@@ -72,8 +72,10 @@ type ConsoleGuardSignals struct {
 	TerminalEvent          string
 	VisibleRunes           int64
 	ObservationDurationMS  int64
-	FirstVisibleObserved   bool
-	FirstVisibleMS         int64
+	// FirstVisibleObserved / FirstVisibleMS 保留旧 JSON 字段名，实际承载与主审计
+	// 相同的首个 generated delta 时间；可见文本统计仍由 VisibleRunes/VisibleTokens 承载。
+	FirstVisibleObserved bool
+	FirstVisibleMS       int64
 }
 
 // ConsoleGuardVerdict 是单条上游流的扣流判定。

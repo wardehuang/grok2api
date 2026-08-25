@@ -122,6 +122,15 @@ func (t *firstTokenTimer) mark() {
 	})
 }
 
+func (t *firstTokenTimer) setMilliseconds(value int64) {
+	if t == nil {
+		return
+	}
+	t.once.Do(func() {
+		t.encoded.Store(max(int64(0), value) + 1)
+	})
+}
+
 func (t *firstTokenTimer) milliseconds() *int64 {
 	if t == nil {
 		return nil

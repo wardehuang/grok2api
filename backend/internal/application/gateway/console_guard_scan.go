@@ -176,6 +176,16 @@ func (s *consoleGuardScanState) signals() ConsoleGuardSignals {
 	}
 }
 
+func noteConsoleGuardFirstToken(state *consoleGuardScanState) {
+	if state == nil || state.firstVisibleObserved {
+		return
+	}
+	state.firstVisibleObserved = true
+	if !state.startedAt.IsZero() {
+		state.firstVisibleMS = max(0, time.Since(state.startedAt).Milliseconds())
+	}
+}
+
 func appendConsoleGuardEvidence(target *[]audit.ConsoleGuardEvidence, code, detail string) {
 	for _, existing := range *target {
 		if existing.Code == code {
@@ -250,6 +260,12 @@ func observeConsoleGuardChat(state *consoleGuardScanState, payload []byte) {
 				Reasoning        string `json:"reasoning"`
 				ReasoningContent string `json:"reasoning_content"`
 				ThinkingContent  string `json:"thinking_content"`
+				Refusal          string `json:"refusal"`
+				ToolCalls        []struct {
+					Function struct {
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
 			} `json:"delta"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
@@ -281,19 +297,30 @@ func observeConsoleGuardChat(state *consoleGuardScanState, payload []byte) {
 	for _, choice := range event.Choices {
 		delta := choice.Delta
 		if delta.Reasoning != "" {
+			noteConsoleGuardFirstToken(state)
 			state.hasThinking = true
 			appendConsoleGuardEvidence(&state.thinkingEvidence, "chat.reasoning_delta", "delta.reasoning contains non-empty text")
 		}
 		if delta.ReasoningContent != "" {
+			noteConsoleGuardFirstToken(state)
 			state.hasThinking = true
 			appendConsoleGuardEvidence(&state.thinkingEvidence, "chat.reasoning_content_delta", "delta.reasoning_content contains non-empty text")
 		}
 		if delta.ThinkingContent != "" {
+			noteConsoleGuardFirstToken(state)
 			state.hasThinking = true
 			appendConsoleGuardEvidence(&state.thinkingEvidence, "chat.thinking_content_delta", "delta.thinking_content contains non-empty text")
 		}
 		if delta.Content != "" {
 			noteConsoleGuardVisibleContent(state, delta.Content)
+		}
+		if delta.Refusal != "" {
+			noteConsoleGuardFirstToken(state)
+		}
+		for _, call := range delta.ToolCalls {
+			if call.Function.Arguments != "" {
+				noteConsoleGuardFirstToken(state)
+			}
 		}
 		if choice.FinishReason != "" {
 			setConsoleGuardTerminal(state, "chat.finish_reason:"+choice.FinishReason)
@@ -312,6 +339,7 @@ func noteConsoleGuardReasoningItem(state *consoleGuardScanState, item consoleGua
 		return
 	}
 	if strings.TrimSpace(item.ID) != "" {
+		noteConsoleGuardFirstToken(state)
 		state.reasoningStarted = true
 		appendConsoleGuardEvidence(&state.reasoningStartEvidence, "responses.reasoning_item", "reasoning output item has a non-empty ID")
 	}
@@ -348,6 +376,7 @@ func observeConsoleGuardResponses(state *consoleGuardScanState, payload []byte) 
 		setConsoleGuardTerminal(state, event.Type)
 	case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
 		if event.Delta != "" {
+			noteConsoleGuardFirstToken(state)
 			state.hasThinking = true
 			appendConsoleGuardEvidence(&state.thinkingEvidence, "responses."+event.Type, "reasoning event delta contains non-empty text")
 		}
@@ -356,6 +385,10 @@ func observeConsoleGuardResponses(state *consoleGuardScanState, payload []byte) 
 	case "response.output_text.delta":
 		if event.Delta != "" {
 			noteConsoleGuardVisibleContent(state, event.Delta)
+		}
+	case "response.refusal.delta", "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
+		if event.Delta != "" {
+			noteConsoleGuardFirstToken(state)
 		}
 	}
 	if event.Response != nil {
@@ -385,9 +418,10 @@ func observeConsoleGuardAnthropic(state *consoleGuardScanState, payload []byte) 
 			Type string `json:"type"`
 		} `json:"content_block"`
 		Delta struct {
-			Type     string `json:"type"`
-			Text     string `json:"text"`
-			Thinking string `json:"thinking"`
+			Type        string `json:"type"`
+			Text        string `json:"text"`
+			Thinking    string `json:"thinking"`
+			PartialJSON string `json:"partial_json"`
 		} `json:"delta"`
 		Usage *struct {
 			OutputTokens        int64 `json:"output_tokens"`
@@ -404,16 +438,21 @@ func observeConsoleGuardAnthropic(state *consoleGuardScanState, payload []byte) 
 		setConsoleGuardTerminal(state, "anthropic.message_stop")
 	case "content_block_start":
 		if event.ContentBlock.Type == "thinking" {
+			noteConsoleGuardFirstToken(state)
 			state.reasoningStarted = true
 			appendConsoleGuardEvidence(&state.reasoningStartEvidence, "anthropic.thinking_block", "content block type is thinking")
 		}
 	case "content_block_delta":
 		if event.Delta.Type == "thinking_delta" && event.Delta.Thinking != "" {
+			noteConsoleGuardFirstToken(state)
 			state.hasThinking = true
 			appendConsoleGuardEvidence(&state.thinkingEvidence, "anthropic.thinking_delta", "thinking_delta contains non-empty text")
 		}
 		if event.Delta.Type == "text_delta" && event.Delta.Text != "" {
 			noteConsoleGuardVisibleContent(state, event.Delta.Text)
+		}
+		if event.Delta.Type == "input_json_delta" && event.Delta.PartialJSON != "" {
+			noteConsoleGuardFirstToken(state)
 		}
 	}
 	if event.Usage != nil {
@@ -429,22 +468,17 @@ func noteConsoleGuardVisibleContent(state *consoleGuardScanState, text string) {
 	if text == "" {
 		return
 	}
-	if !state.firstVisibleObserved {
-		state.firstVisibleObserved = true
-		if !state.startedAt.IsZero() {
-			state.firstVisibleMS = max(0, time.Since(state.startedAt).Milliseconds())
-		}
-	}
+	noteConsoleGuardFirstToken(state)
 	state.visibleRunes += utf8.RuneCountInString(text)
 }
 
-func peekConsoleGuardStream(ctx context.Context, body io.ReadCloser, protocol string, cfg ConsoleGuardRuntime) (io.ReadCloser, ConsoleGuardVerdict, Usage, ConsoleGuardSignals, error) {
+func peekConsoleGuardStream(ctx context.Context, body io.ReadCloser, protocol string, cfg ConsoleGuardRuntime, requestStartedAt time.Time) (io.ReadCloser, ConsoleGuardVerdict, Usage, ConsoleGuardSignals, error) {
 	cfg = normalizeConsoleGuard(cfg)
 	if body == nil {
 		return io.NopCloser(bytes.NewReader(nil)), ConsoleGuardWait, Usage{}, ConsoleGuardSignals{}, errConsoleGuardEmptyStream
 	}
 	pump := newConsoleGuardReadPump(body)
-	state := consoleGuardScanState{protocol: protocol, startedAt: time.Now()}
+	state := consoleGuardScanState{protocol: protocol, startedAt: requestStartedAt}
 	var held bytes.Buffer
 	holdTimer := time.NewTimer(cfg.HoldTimeout)
 	defer holdTimer.Stop()

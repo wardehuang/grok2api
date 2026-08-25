@@ -306,6 +306,12 @@ type ListFilter struct {
 	Sort        repository.SortQuery
 }
 
+type ProviderAccountReference struct {
+	ID    uint64
+	Name  string
+	Email string
+}
+
 type Summary struct {
 	Total      int64
 	Available  int64
@@ -617,6 +623,22 @@ func (s *Service) List(ctx context.Context, page, pageSize int, search string, f
 		views = append(views, view)
 	}
 	return views, total, nil
+}
+
+func (s *Service) ListProviderAccountReferences(ctx context.Context, providerValue accountdomain.Provider) ([]ProviderAccountReference, error) {
+	references, err := s.accounts.ListProviderAccountReferences(ctx, providerValue)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]ProviderAccountReference, 0, len(references))
+	for _, reference := range references {
+		result = append(result, ProviderAccountReference{
+			ID:    reference.ID,
+			Name:  reference.Name,
+			Email: reference.Email,
+		})
+	}
+	return result, nil
 }
 
 func (s *Service) buildBotFlaggedAccountIDs(ctx context.Context) ([]uint64, error) {

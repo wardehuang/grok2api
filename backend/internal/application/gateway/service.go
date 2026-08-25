@@ -986,7 +986,7 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 		if usage.Reported {
 			record.UsageSource = usageSource
 		}
-		record.DurationMS = attemptDetail.UpstreamDurationMS
+		record.DurationMS = attemptDetail.ObservationDurationMS
 		if attemptDetail.FirstVisibleObserved {
 			firstTokenMS := attemptDetail.FirstVisibleMS
 			record.FirstTokenMS = &firstTokenMS
@@ -1682,7 +1682,7 @@ attemptLoop:
 			}
 			if consoleGuardEnabled {
 				consoleGuardAttempts++
-				replay, verdict, peekUsage, holdSignals, peekErr := peekConsoleGuardStream(ctx, response.Body, consoleGuardProtocol, consoleGuardCfg)
+				replay, verdict, peekUsage, holdSignals, peekErr := peekConsoleGuardStream(ctx, response.Body, consoleGuardProtocol, consoleGuardCfg, startedAt)
 				if peekErr != nil {
 					errorDetail := buildConsoleGuardAttemptDetail(consoleGuardProtocol, holdSignals, peekUsage, consoleGuardCfg, ConsoleGuardWait, ConsoleGuardActionRetry, consoleGuardAttempts, time.Since(responseStartedAt).Milliseconds())
 					errorDetail.Verdict = "error"
@@ -1720,6 +1720,9 @@ attemptLoop:
 						break
 					}
 					continue
+				}
+				if verdict != ConsoleGuardWithhold && holdSignals.FirstVisibleObserved {
+					firstToken.setMilliseconds(holdSignals.FirstVisibleMS)
 				}
 				response.Body = replay
 				hasNextAccount := attemptPolicy.hasNext(attempt) && selection.hasAvailableCandidate(excluded, !quotaProbeAttempted)

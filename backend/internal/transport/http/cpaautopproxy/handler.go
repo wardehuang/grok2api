@@ -29,9 +29,6 @@ const (
 	// webNodeNameInfix sits between the shared prefix and the slot number so both
 	// Console and Web nodes stay discoverable under the same CPA naming family.
 	webNodeNameInfix = "web_"
-	// accountLookupPageSize uses the repository max page size so one bulk request
-	// can index provider emails with as few List round-trips as possible.
-	accountLookupPageSize = repository.MaxPageSize
 )
 
 // Handler wires the CPA auto-proxy slot API onto the admin surface.
@@ -672,30 +669,17 @@ func (handler *Handler) buildNodeNameIndex(requestContext context.Context) (map[
 }
 
 func (handler *Handler) listProviderAccounts(requestContext context.Context, provider accountdomain.Provider) ([]accountRef, error) {
-	accounts := make([]accountRef, 0)
-	page := 1
-	for {
-		views, total, err := handler.accounts.List(
-			requestContext,
-			page,
-			accountLookupPageSize,
-			"",
-			accountapp.ListFilter{Provider: string(provider)},
-		)
-		if err != nil {
-			return nil, err
-		}
-		for _, view := range views {
-			accounts = append(accounts, accountRef{
-				ID:    view.Credential.ID,
-				Name:  strings.TrimSpace(view.Credential.Name),
-				Email: strings.ToLower(strings.TrimSpace(view.Credential.Email)),
-			})
-		}
-		if int64(page*accountLookupPageSize) >= total || len(views) == 0 {
-			break
-		}
-		page++
+	references, err := handler.accounts.ListProviderAccountReferences(requestContext, provider)
+	if err != nil {
+		return nil, err
+	}
+	accounts := make([]accountRef, 0, len(references))
+	for _, reference := range references {
+		accounts = append(accounts, accountRef{
+			ID:    reference.ID,
+			Name:  strings.TrimSpace(reference.Name),
+			Email: strings.ToLower(strings.TrimSpace(reference.Email)),
+		})
 	}
 	return accounts, nil
 }

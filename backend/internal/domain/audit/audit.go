@@ -82,12 +82,14 @@ type ConsoleGuardAttemptDetail struct {
 	HoldExpired                 bool                   `json:"holdExpired"`
 	ObservationDurationMS       int64                  `json:"observationDurationMs"`
 	UpstreamDurationMS          int64                  `json:"upstreamDurationMs"`
-	FirstVisibleObserved        bool                   `json:"firstVisibleObserved"`
-	FirstVisibleMS              int64                  `json:"firstVisibleMs"`
-	GenerationWindowMS          int64                  `json:"generationWindowMs"`
-	OutputTokensPerSecond       float64                `json:"outputTokensPerSecond"`
-	AccountDisabled             bool                   `json:"accountDisabled"`
-	DecisionReasons             []ConsoleGuardEvidence `json:"decisionReasons"`
+	// Legacy JSON names retained; values use the same generated-delta first-token
+	// timing as the main request audit.
+	FirstVisibleObserved  bool                   `json:"firstVisibleObserved"`
+	FirstVisibleMS        int64                  `json:"firstVisibleMs"`
+	GenerationWindowMS    int64                  `json:"generationWindowMs"`
+	OutputTokensPerSecond float64                `json:"outputTokensPerSecond"`
+	AccountDisabled       bool                   `json:"accountDisabled"`
+	DecisionReasons       []ConsoleGuardEvidence `json:"decisionReasons"`
 }
 
 // ConsoleGuardDetail 是一条 Console 请求对应的唯一降智事件详情。
