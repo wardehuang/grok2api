@@ -302,6 +302,7 @@ type accountResponse struct {
 	LastRefreshErrorMessage    string                  `json:"lastRefreshErrorMessage,omitempty"`
 	LastRefreshErrorResponse   string                  `json:"lastRefreshErrorResponse,omitempty"`
 	Priority                   int                     `json:"priority"`
+	SchedulingOrder            int                     `json:"schedulingOrder,omitempty"`
 	MaxConcurrent              int                     `json:"maxConcurrent"`
 	MinimumRemaining           float64                 `json:"minimumRemaining"`
 	FailureCount               int                     `json:"failureCount"`
@@ -1489,7 +1490,7 @@ func newAccountResponse(value accountapp.View) accountResponse {
 		Enabled: c.Enabled, AuthStatus: string(c.AuthStatus), Refreshable: c.EncryptedRefreshToken != "",
 		RefreshDueAt: c.RefreshDueAt, LastRefreshAt: c.LastRefreshAt,
 		RefreshFailures: c.RefreshFailureCount, LastRefreshErrorStatus: c.LastRefreshErrorStatus, LastRefreshError: c.LastRefreshErrorCode, LastRefreshErrorMessage: c.LastRefreshErrorMessage, LastRefreshErrorResponse: c.LastRefreshErrorResponse,
-		Priority: c.Priority, MaxConcurrent: c.MaxConcurrent, MinimumRemaining: c.MinimumRemaining,
+		Priority: c.Priority, SchedulingOrder: c.SchedulingOrder, MaxConcurrent: c.MaxConcurrent, MinimumRemaining: c.MinimumRemaining,
 		FailureCount: c.FailureCount, CooldownUntil: c.CooldownUntil, LastError: c.LastError,
 		LastUsedAt: c.LastUsedAt, LinkedAccountID: c.LinkedAccountID, LinkedName: c.LinkedAccountName, LinkedProvider: string(c.LinkedProvider),
 		CreatedAt: c.CreatedAt, ObservedModel: c.ObservedModel, ObservedModelAt: c.ObservedModelAt,

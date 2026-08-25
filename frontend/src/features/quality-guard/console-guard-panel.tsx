@@ -139,12 +139,17 @@ export function ConsoleGuardPanel() {
             <h2 className="text-sm font-medium">{t("qualityGuard.consoleGuard.recordNonDegradedEvents")}</h2>
             <p className="mt-1 max-w-3xl text-xs text-muted-foreground">{t("qualityGuard.consoleGuard.recordNonDegradedEventsHelp")}</p>
           </div>
-          <Switch
-            checked={recordNonDegradedEvents}
-            disabled={recordEventsMutation.isPending}
-            onCheckedChange={(checked) => recordEventsMutation.mutate(checked)}
-            aria-label={t("qualityGuard.consoleGuard.recordNonDegradedEvents")}
-          />
+          <div className="flex shrink-0 items-center gap-3">
+            <Badge variant={recordNonDegradedEvents ? "default" : "secondary"}>
+              {recordNonDegradedEvents ? t("qualityGuard.consoleGuard.enabledStatus") : t("qualityGuard.consoleGuard.disabledStatus")}
+            </Badge>
+            <Switch
+              checked={recordNonDegradedEvents}
+              disabled={recordEventsMutation.isPending}
+              onCheckedChange={(checked) => recordEventsMutation.mutate(checked)}
+              aria-label={t("qualityGuard.consoleGuard.recordNonDegradedEvents")}
+            />
+          </div>
         </div>
       </section>
 

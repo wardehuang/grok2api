@@ -490,8 +490,27 @@ func newAuditResponse(value auditdomain.Record) auditResponse {
 		NumSourcesUsed: value.NumSourcesUsed, NumServerSideToolsUsed: value.NumServerSideToolsUsed,
 		ContextInputTokens: value.ContextInputTokens, ContextOutputTokens: value.ContextOutputTokens,
 		FirstTokenMS: value.FirstTokenMS, OutputTokensPerSecond: auditOutputTokensPerSecond(value), DurationMS: value.DurationMS,
-		ErrorCode: value.ErrorCode, AttemptCount: value.AttemptCount, ConsoleGuard: value.ConsoleGuard, CreatedAt: value.CreatedAt,
+		ErrorCode: value.ErrorCode, AttemptCount: value.AttemptCount, ConsoleGuard: normalizeConsoleGuardDetail(value.ConsoleGuard), CreatedAt: value.CreatedAt,
 	}
+}
+
+// normalizeConsoleGuardDetail keeps the API array contract for legacy rows that
+// were persisted with nil slices and therefore decode back to JSON null.
+func normalizeConsoleGuardDetail(value *auditdomain.ConsoleGuardDetail) *auditdomain.ConsoleGuardDetail {
+	if value == nil {
+		return nil
+	}
+	normalized := *value
+	normalized.ThinkingEvidence = append([]auditdomain.ConsoleGuardEvidence{}, value.ThinkingEvidence...)
+	normalized.ReasoningStartEvidence = append([]auditdomain.ConsoleGuardEvidence{}, value.ReasoningStartEvidence...)
+	normalized.DecisionReasons = append([]auditdomain.ConsoleGuardEvidence{}, value.DecisionReasons...)
+	normalized.Attempts = append([]auditdomain.ConsoleGuardAttemptDetail{}, value.Attempts...)
+	for index := range normalized.Attempts {
+		normalized.Attempts[index].ThinkingEvidence = append([]auditdomain.ConsoleGuardEvidence{}, normalized.Attempts[index].ThinkingEvidence...)
+		normalized.Attempts[index].ReasoningStartEvidence = append([]auditdomain.ConsoleGuardEvidence{}, normalized.Attempts[index].ReasoningStartEvidence...)
+		normalized.Attempts[index].DecisionReasons = append([]auditdomain.ConsoleGuardEvidence{}, normalized.Attempts[index].DecisionReasons...)
+	}
+	return &normalized
 }
 
 func newBillingBreakdown(value auditdomain.Record) *billingBreakdownResponse {

@@ -484,20 +484,22 @@ func buildConsoleGuardDetail(protocol, skipReason string, cfg ConsoleGuardRuntim
 	detail := &audit.ConsoleGuardDetail{
 		Degraded:   degraded,
 		SkipReason: skipReason,
-		Attempts:   append([]audit.ConsoleGuardAttemptDetail(nil), attempts...),
+		Attempts:   append([]audit.ConsoleGuardAttemptDetail{}, attempts...),
 	}
 	if len(attempts) > 0 {
 		detail.ConsoleGuardAttemptDetail = attempts[len(attempts)-1]
 		return detail
 	}
 	detail.ConsoleGuardAttemptDetail = audit.ConsoleGuardAttemptDetail{
-		Protocol:      protocol,
-		Verdict:       "skipped",
-		Action:        string(ConsoleGuardActionDeliver),
-		MaxAttempts:   consoleGuardMaxAttempts,
-		SoftTPS:       cfg.SoftTPS,
-		HardTPS:       cfg.HardTPS,
-		HoldTimeoutMS: cfg.HoldTimeout.Milliseconds(),
+		Protocol:               protocol,
+		Verdict:                "skipped",
+		Action:                 string(ConsoleGuardActionDeliver),
+		MaxAttempts:            consoleGuardMaxAttempts,
+		SoftTPS:                cfg.SoftTPS,
+		HardTPS:                cfg.HardTPS,
+		HoldTimeoutMS:          cfg.HoldTimeout.Milliseconds(),
+		ThinkingEvidence:       []audit.ConsoleGuardEvidence{},
+		ReasoningStartEvidence: []audit.ConsoleGuardEvidence{},
 		DecisionReasons: []audit.ConsoleGuardEvidence{{
 			Code:   "guard_skipped",
 			Detail: "本次 Console 请求未进入流扫描：" + skipReason,

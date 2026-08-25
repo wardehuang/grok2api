@@ -1458,11 +1458,11 @@ export function AccountsPage() {
               <col style={{ width: "16%" }} />
               <col style={{ width: "7%" }} />
               <col style={{ width: "7%" }} />
-              <col style={{ width: "11%" }} />
-              <col style={{ width: provider === "grok_build" ? "12%" : "29%" }} />
-              <col style={{ width: "7%" }} />
-              {provider === "grok_build" ? <col style={{ width: "16%" }} /> : null}
-              <col style={{ width: provider === "grok_build" ? "17%" : "16%" }} />
+              <col style={{ width: "8%" }} />
+              <col style={{ width: "5%" }} />
+              <col style={{ width: provider === "grok_build" ? "20%" : "36%" }} />
+              {provider === "grok_build" ? <col style={{ width: "14%" }} /> : null}
+              <col style={{ width: provider === "grok_build" ? "16%" : "14%" }} />
               <col style={{ width: "4%" }} />
             </colgroup>
             <TableHeader>
@@ -1493,7 +1493,7 @@ export function AccountsPage() {
                     <TableCell className="text-center whitespace-nowrap">{provider === "grok_web" ? <WebAccountType tier={account.webTier} /> : provider === "grok_console" ? <AccountTypeText label={t("accountType.console")} variant="free" /> : <AccountType quota={account.quota} />}</TableCell>
                     <TableCell className="text-center whitespace-nowrap"><AccountStatus account={account} /></TableCell>
                     <TableCell className="whitespace-nowrap text-center font-mono text-xs">{account.egressNodeId ? account.egressExitIp || "—" : t("accounts.noEgress")}</TableCell>
-                    <TableCell className="text-center whitespace-nowrap text-sm tabular-nums">{account.priority}</TableCell>
+                    <TableCell className="text-center whitespace-nowrap text-sm tabular-nums">{account.schedulingOrder ?? "—"}</TableCell>
                     <TableCell className={provider === "grok_build" ? undefined : "px-6"}>{provider === "grok_web" ? <WebQuota windows={account.quotaWindows ?? []} locale={i18n.language} tier={account.webTier} /> : provider === "grok_console" ? <ConsoleQuota windows={account.quotaWindows ?? []} locale={i18n.language} /> : <AccountQuota quota={account.quota} billing={account.billing} locale={i18n.language} />}</TableCell>
                     {provider === "grok_build" ? <TableCell className="whitespace-nowrap pl-4 text-xs">
                       {account.refreshable ? (

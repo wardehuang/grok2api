@@ -170,8 +170,11 @@ type Credential struct {
 	Enabled                      bool
 	AuthStatus                   AuthStatus
 	// ReauthMarkedAt 仅在切入 reauthRequired 时写入；恢复 active 时清空。自动清理以该时刻为 minAge 锚点。
-	ReauthMarkedAt   *time.Time
-	Priority         int
+	ReauthMarkedAt *time.Time
+	Priority       int
+	// SchedulingOrder 是管理端账号列表按 Priority DESC、ID ASC 计算的稳定序号。
+	// 仅用于展示，不参与账号持久化。
+	SchedulingOrder  int
 	MaxConcurrent    int
 	MinimumRemaining float64
 	FailureCount     int

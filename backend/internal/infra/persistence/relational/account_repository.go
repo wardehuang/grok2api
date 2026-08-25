@@ -39,6 +39,11 @@ type quotaBreakdownJSON struct {
 	UsagePercent float64 `json:"usagePercent"`
 }
 
+type accountSchedulingOrderRow struct {
+	ID              uint64 `gorm:"column:id"`
+	SchedulingOrder int    `gorm:"column:scheduling_order"`
+}
+
 const (
 	accountUpdateBatchSize      = 500
 	accountPaidPlanSignal       = `(LOWER(REPLACE(REPLACE(REPLACE(REPLACE(TRIM(billing.plan_code), ' ', ''), '_', ''), '-', ''), '+', 'plus')) IN ('super', 'supergrok', 'supergrokpro', 'supergrokheavy', 'supergroklite', 'grokpro', 'xpremium', 'xpremiumplus', 'apikey') OR LOWER(REPLACE(REPLACE(REPLACE(REPLACE(TRIM(billing.plan_name), ' ', ''), '_', ''), '-', ''), '+', 'plus')) IN ('super', 'supergrok', 'supergrokpro', 'supergrokheavy', 'supergroklite', 'grokpro', 'xpremium', 'xpremiumplus', 'apikey'))`
@@ -148,6 +153,25 @@ func (r *AccountRepository) List(ctx context.Context, input repository.AccountLi
 	out := make([]account.Credential, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, toAccountDomain(row))
+	}
+	if len(out) > 0 {
+		accountIDs := make([]uint64, 0, len(out))
+		for _, value := range out {
+			accountIDs = append(accountIDs, value.ID)
+		}
+		var orderRows []accountSchedulingOrderRow
+		if err := r.db.db.WithContext(ctx).Table("provider_accounts AS current_account").
+			Select("current_account.id, (SELECT COUNT(*) + 1 FROM provider_accounts AS ranked_account WHERE ranked_account.provider = current_account.provider AND (ranked_account.priority > current_account.priority OR (ranked_account.priority = current_account.priority AND ranked_account.id < current_account.id))) AS scheduling_order").
+			Where("current_account.id IN ?", accountIDs).Scan(&orderRows).Error; err != nil {
+			return nil, 0, err
+		}
+		orders := make(map[uint64]int, len(orderRows))
+		for _, row := range orderRows {
+			orders[row.ID] = row.SchedulingOrder
+		}
+		for index := range out {
+			out[index].SchedulingOrder = orders[out[index].ID]
+		}
 	}
 	if err := r.attachAccountLinks(ctx, out); err != nil {
 		return nil, 0, err
