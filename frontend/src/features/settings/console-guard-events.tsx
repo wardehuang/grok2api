@@ -1,8 +1,9 @@
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { getRequestAudits, type AuditDTO } from "@/features/audits/request-audits-api";
 import { RequestAuditDetailDialog } from "@/features/audits/request-audit-detail-dialog";
@@ -14,11 +15,13 @@ function isDegradedEvent(event: ConsoleGuardEvent): boolean {
 }
 
 export function useConsoleGuardEvents(enabled: boolean) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: ["console-guard-events", "grok_console"],
     enabled,
     refetchInterval: 30_000,
-    queryFn: () => getRequestAudits({ period: "24h", pageSize: 20, provider: "grok_console", consoleGuardOnly: true }),
+    queryFn: ({ pageParam }) => getRequestAudits({ period: "24h", pageSize: 20, cursor: pageParam || undefined, provider: "grok_console", consoleGuardOnly: true }),
+    initialPageParam: "",
+    getNextPageParam: (lastPage) => (lastPage.hasMore && lastPage.nextCursor ? lastPage.nextCursor : undefined),
   });
 }
 
@@ -26,7 +29,7 @@ export function ConsoleGuardEvents() {
   const { t } = useTranslation();
   const eventsQuery = useConsoleGuardEvents(true);
   const [selectedEvent, setSelectedEvent] = useState<AuditDTO | null>(null);
-  const items = useMemo(() => Array.from(new Map((eventsQuery.data?.items ?? []).map((event) => [event.requestId || event.id, event])).values()), [eventsQuery.data?.items]);
+  const items = useMemo(() => Array.from(new Map((eventsQuery.data?.pages ?? []).flatMap((page) => page.items).map((event) => [event.requestId || event.id, event])).values()), [eventsQuery.data]);
 
   if (eventsQuery.isPending) {
     return <div className="flex min-h-16 items-center justify-center"><Spinner /></div>;
@@ -55,6 +58,11 @@ export function ConsoleGuardEvents() {
           </button>;
         })()
       ))}
+      {eventsQuery.hasNextPage ? (
+        <Button type="button" variant="secondary" size="sm" disabled={eventsQuery.isFetchingNextPage} onClick={() => void eventsQuery.fetchNextPage()} className="w-full">
+          {eventsQuery.isFetchingNextPage ? <Spinner className="size-4" /> : t("qualityGuard.consoleGuard.eventsLoadMore")}
+        </Button>
+      ) : null}
       <RequestAuditDetailDialog audit={selectedEvent} open={selectedEvent !== null} onOpenChange={(open) => { if (!open) setSelectedEvent(null); }} />
     </div>
   );

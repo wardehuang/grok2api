@@ -25,15 +25,18 @@ export function ConsoleGuardPanel() {
   const [recordNonDegradedEvents, setRecordNonDegradedEvents] = useState(true);
   const [degradedEgressNodeFilePath, setDegradedEgressNodeFilePath] = useState("");
   const [proxyPreviewOpen, setProxyPreviewOpen] = useState(false);
+  const debugLog = (...args: unknown[]) => console.info("[console-guard-debug]", new Date().toISOString(), ...args);
   useEffect(() => {
     if (!settingsQuery.data) return;
-    setSoftTPS(settingsQuery.data.config.consoleGuard.softTPS);
-    setHardTPS(settingsQuery.data.config.consoleGuard.hardTPS);
-    setFirstTokenThresholdMS(settingsQuery.data.config.consoleGuard.firstTokenThresholdMS);
-    setGenerationWindowThresholdMS(settingsQuery.data.config.consoleGuard.generationWindowThresholdMS);
-    setMinOutputReasoningTokens(settingsQuery.data.config.consoleGuard.minOutputReasoningTokens);
-    setRecordNonDegradedEvents(settingsQuery.data.config.consoleGuard.recordNonDegradedEvents);
-    setDegradedEgressNodeFilePath(settingsQuery.data.config.consoleGuard.degradedEgressNodeFilePath);
+    const cg = settingsQuery.data.config.consoleGuard;
+    debugLog("settings snapshot applied", { revision: settingsQuery.data.revision, recordNonDegradedEvents: cg.recordNonDegradedEvents, updatedAt: settingsQuery.data.updatedAt });
+    setSoftTPS(cg.softTPS);
+    setHardTPS(cg.hardTPS);
+    setFirstTokenThresholdMS(cg.firstTokenThresholdMS);
+    setGenerationWindowThresholdMS(cg.generationWindowThresholdMS);
+    setMinOutputReasoningTokens(cg.minOutputReasoningTokens);
+    setRecordNonDegradedEvents(cg.recordNonDegradedEvents);
+    setDegradedEgressNodeFilePath(cg.degradedEgressNodeFilePath);
   }, [settingsQuery.data]);
   const toggleMutation = useMutation({
     mutationFn: (enabled: boolean) => {
@@ -73,10 +76,12 @@ export function ConsoleGuardPanel() {
     },
     onSuccess: (snapshot) => {
       queryClient.setQueryData(["settings"], snapshot);
+      debugLog("record-events PUT success", { requested: recordEventsMutation.variables, serverValue: snapshot.config.consoleGuard.recordNonDegradedEvents, revision: snapshot.revision });
       setRecordNonDegradedEvents(snapshot.config.consoleGuard.recordNonDegradedEvents);
       toast.success(t("qualityGuard.consoleGuard.saved"));
     },
     onError: (error) => {
+      debugLog("record-events PUT failed", error instanceof Error ? error.message : error);
       setRecordNonDegradedEvents(settingsQuery.data!.config.consoleGuard.recordNonDegradedEvents);
       toast.error(error instanceof Error ? error.message : t("qualityGuard.consoleGuard.saveFailed"));
     },
@@ -151,6 +156,7 @@ export function ConsoleGuardPanel() {
               checked={recordNonDegradedEvents}
               disabled={recordEventsMutation.isPending}
               onCheckedChange={(checked) => {
+                debugLog("record-events toggle click", { checked, current: recordNonDegradedEvents, revision: settingsQuery.data!.revision, snapshotValue: settingsQuery.data!.config.consoleGuard.recordNonDegradedEvents });
                 setRecordNonDegradedEvents(checked);
                 recordEventsMutation.mutate(checked);
               }}

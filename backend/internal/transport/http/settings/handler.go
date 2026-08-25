@@ -2,6 +2,7 @@ package settings
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -191,7 +192,13 @@ func (h *Handler) update(c *gin.Context) {
 		return
 	}
 	result, err := h.service.Update(c.Request.Context(), request.Revision, request.Config.toApplication())
+	if value := request.Config.ConsoleGuard; value != nil && value.RecordNonDegradedEvents != nil {
+		slog.Info("console_guard_settings_update", "requestedRecordNonDegradedEvents", *value.RecordNonDegradedEvents, "revision", request.Revision)
+	}
 	if err != nil {
+		if value := request.Config.ConsoleGuard; value != nil && value.RecordNonDegradedEvents != nil {
+			slog.Warn("console_guard_settings_update_failed", "error", err, "errorType", errors.Unwrap(err), "revision", request.Revision)
+		}
 		if errors.Is(err, settingsapp.ErrInvalidInput) {
 			response.Error(c, http.StatusBadRequest, "settingsUpdateFailed", err.Error())
 			return

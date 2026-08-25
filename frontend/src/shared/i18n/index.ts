@@ -515,7 +515,7 @@ const resources = {
           proxyFileTitle: "降智代理节点共享文件", proxyFileHelp: "降智时将实际代理地址写入该文件，一行一个；其他服务器进程可直接读取。",
           proxyFilePath: "文件路径", proxyFilePathInvalid: "请输入有效文件路径。", proxyFilePreview: "预览", proxyFileSave: "保存路径", proxyFileSaved: "代理节点文件路径已保存。", proxyFileSaveFailed: "代理节点文件路径保存失败。", proxyFilePreviewTitle: "代理节点文件预览", proxyFileEmpty: "文件为空。", proxyFileReadFailed: "读取代理节点文件失败。",
           degradedStatus: "已降智", normalStatus: "未降智",
-          eventsTitle: "最近降智事件（24 小时）", eventsEmpty: "暂无 Console 降智事件", eventsFailed: "读取降智事件失败",
+          eventsTitle: "最近降智事件（24 小时）", eventsEmpty: "暂无 Console 降智事件", eventsFailed: "读取降智事件失败", eventsLoadMore: "加载更多",
           outputTokens: "输出 {{count}} token", reasoningTokens: "推理 {{count}} token", duration: "{{value}} 秒", thinkingDetected: "检测到真实思考", thinkingMissing: "未检测到真实思考",
         },
         degrade: {
@@ -1647,7 +1647,7 @@ const resources = {
           proxyFileTitle: "Degraded proxy-node shared file", proxyFileHelp: "When degradation triggers, the actual proxy address is written here, one per line, for other server processes to read.",
           proxyFilePath: "File path", proxyFilePathInvalid: "Enter a valid file path.", proxyFilePreview: "Preview", proxyFileSave: "Save path", proxyFileSaved: "Proxy-node file path saved.", proxyFileSaveFailed: "Failed to save proxy-node file path.", proxyFilePreviewTitle: "Proxy-node file preview", proxyFileEmpty: "The file is empty.", proxyFileReadFailed: "Failed to read the proxy-node file.",
           degradedStatus: "Degraded", normalStatus: "Not degraded",
-          eventsTitle: "Recent degrade events (24h)", eventsEmpty: "No Console degrade events", eventsFailed: "Failed to load degrade events",
+          eventsTitle: "Recent degrade events (24h)", eventsEmpty: "No Console degrade events", eventsFailed: "Failed to load degrade events", eventsLoadMore: "Load more",
           outputTokens: "output {{count}} tokens", reasoningTokens: "reasoning {{count}} tokens", duration: "{{value}}s", thinkingDetected: "Real thinking detected", thinkingMissing: "No real thinking detected",
         },
         degrade: {
