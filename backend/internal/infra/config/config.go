@@ -303,16 +303,17 @@ type QualityGuardRequestRetryConfig struct {
 }
 
 // ConsoleGuardConfig 是 Console 账号专用的降智防护配置。
-// 判定参数（30s hold、5 个账号、fail_closed、命中即停用）固定在代码里；TPS 和 burst 阈值可热更新。
+// 判定参数（5 个账号、fail_closed、命中即停用）固定在代码里；hold 窗口、TPS 和 burst 阈值可热更新。
 type ConsoleGuardConfig struct {
-	Enabled                     bool    `yaml:"enabled"`
-	SoftTPS                     float64 `yaml:"softTPS"`
-	HardTPS                     float64 `yaml:"hardTPS"`
-	FirstTokenThresholdMS       int64   `yaml:"firstTokenThresholdMS"`
-	GenerationWindowThresholdMS int64   `yaml:"generationWindowThresholdMS"`
-	MinOutputReasoningTokens    int64   `yaml:"minOutputReasoningTokens"`
-	RecordNonDegradedEvents     bool    `yaml:"recordNonDegradedEvents"`
-	DegradedEgressNodeFilePath  string  `yaml:"degradedEgressNodeFilePath"`
+	Enabled                     bool     `yaml:"enabled"`
+	HoldTimeout                 Duration `yaml:"holdTimeout"`
+	SoftTPS                     float64  `yaml:"softTPS"`
+	HardTPS                     float64  `yaml:"hardTPS"`
+	FirstTokenThresholdMS       int64    `yaml:"firstTokenThresholdMS"`
+	GenerationWindowThresholdMS int64    `yaml:"generationWindowThresholdMS"`
+	MinOutputReasoningTokens    int64    `yaml:"minOutputReasoningTokens"`
+	RecordNonDegradedEvents     bool     `yaml:"recordNonDegradedEvents"`
+	DegradedEgressNodeFilePath  string   `yaml:"degradedEgressNodeFilePath"`
 }
 
 type ClientKeyDefaultsConfig struct {
@@ -804,6 +805,9 @@ func validateQualityGuardConfig(value QualityGuardConfig) error {
 }
 
 func validateConsoleGuardConfig(value ConsoleGuardConfig) error {
+	if d := value.HoldTimeout.Value(); d != 0 && (d < time.Second || d > 10*time.Minute) {
+		return errors.New("consoleGuard.holdTimeout 必须在 1s 到 10m 之间")
+	}
 	if value.SoftTPS < 1 || value.HardTPS <= value.SoftTPS || value.HardTPS > 10000 {
 		return errors.New("consoleGuard TPS 阈值无效")
 	}
@@ -975,6 +979,7 @@ func defaultConfig() Config {
 			},
 		},
 		ConsoleGuard: ConsoleGuardConfig{
+			Enabled: false, HoldTimeout: Duration(30 * time.Second),
 			SoftTPS: auditdomain.DefaultDegradeSoftTPS, HardTPS: auditdomain.DefaultDegradeHardTPS,
 			FirstTokenThresholdMS: 5000, GenerationWindowThresholdMS: 1250, MinOutputReasoningTokens: 300,
 			RecordNonDegradedEvents: true, DegradedEgressNodeFilePath: consoleguardfile.DefaultPath,

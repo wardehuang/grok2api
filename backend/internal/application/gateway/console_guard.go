@@ -160,15 +160,21 @@ func (s *Service) consoleGuardConfig() ConsoleGuardRuntime {
 // ClassifyConsoleGuardHold 按 Console TPS 和慢首字 burst 阈值决定扣住的流能否转发：
 // TPS 超过 hardTPS 无条件判定降智；TPS 超过 softTPS 且没有真实 thinking 也判定降智。
 // 前两项未命中后，若首字慢、首字后的生成窗口短、输出与 reasoning token 同时超过阈值，
-// 仍判定降智。阈值未命中时，终止流或检测窗口到期后放行；空流交由 finishConsoleGuardPeek
-// 继续按传输错误处理。
+// 仍判定降智。首字超时直接 withhold；首字及时出现后扣住到终止事件再结算，空流交由
+// finishConsoleGuardPeek 继续按传输错误处理。
+//
+// 扣流语义（2026-08 重定）：整条流被扣住直到流结束才做最终判定，因此 completed 事件里的
+// 上游 usage 一定可用。TPS 判定要求生成窗口达到最小阈值：首个可见内容后的毫秒级
+// 分母会让瞬时 TPS 爆炸性虚高（正常流同样命中），必须等窗口成熟。burst 判定则保留
+// “慢首字 + 短生成窗口 + 高 token”三项同时命中的独立口径。
 func ClassifyConsoleGuardHold(sig ConsoleGuardSignals, cfg ConsoleGuardRuntime) ConsoleGuardVerdict {
 	cfg = normalizeConsoleGuard(cfg)
+	generationWindowMS := consoleGuardGenerationWindowMS(sig)
 	tps := consoleGuardOutputTokensPerSecond(sig, Usage{})
-	if tps > cfg.HardTPS {
+	if generationWindowMS >= cfg.GenerationWindowThresholdMS && tps > cfg.HardTPS {
 		return ConsoleGuardWithhold
 	}
-	if tps > cfg.SoftTPS && !sig.HasThinking {
+	if generationWindowMS >= cfg.GenerationWindowThresholdMS && tps > cfg.SoftTPS && !sig.HasThinking {
 		return ConsoleGuardWithhold
 	}
 	if consoleGuardSlowFirstTokenBurst(sig, cfg) {
@@ -180,11 +186,8 @@ func ClassifyConsoleGuardHold(sig ConsoleGuardSignals, cfg ConsoleGuardRuntime) 
 		}
 		return ConsoleGuardDeliver
 	}
-	if sig.HoldExpired {
-		if consoleGuardEffectiveOutputTokens(sig) <= 0 {
-			return ConsoleGuardWait
-		}
-		return ConsoleGuardDeliver
+	if sig.HoldExpired && !sig.FirstVisibleObserved {
+		return ConsoleGuardWithhold
 	}
 	return ConsoleGuardWait
 }
@@ -411,7 +414,7 @@ func buildConsoleGuardAttemptDetail(protocol string, signals ConsoleGuardSignals
 		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "reasoning_started_without_content", Detail: "只观察到 reasoning 起始标记或空 reasoning item，未观察到真实思考文本"})
 	}
 	if reasoningTokens > 0 && !signals.HasThinking {
-		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "reasoning_tokens_not_evidence", Detail: fmt.Sprintf("reasoning tokens=%d 仅作统计，未作为真实思考证据")})
+		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "reasoning_tokens_not_evidence", Detail: fmt.Sprintf("reasoning tokens=%d 仅作统计，未作为真实思考证据", reasoningTokens)})
 	}
 	decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "tps_formula", Detail: fmt.Sprintf("Token/s=(output_tokens + reasoning_tokens)*1000/(duration_ms - first_token_ms)=(%d + %d)*1000/(%d - %d)=%.2f", outputTokens, reasoningTokens, signals.ObservationDurationMS, consoleGuardFirstTokenMS(signals), outputTokensPerSecond)})
 	decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "tps_thresholds", Detail: fmt.Sprintf("softTPS=%.2f, hardTPS=%.2f, currentTPS=%.2f", cfg.SoftTPS, cfg.HardTPS, outputTokensPerSecond)})
@@ -445,7 +448,7 @@ func buildConsoleGuardAttemptDetail(protocol string, signals ConsoleGuardSignals
 	if signals.Terminal {
 		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "terminal_observed", Detail: "已观察到终止事件：" + signals.TerminalEvent})
 	} else if signals.HoldExpired {
-		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "hold_timeout_reached", Detail: fmt.Sprintf("hold timeout=%dms 已到期", cfg.HoldTimeout.Milliseconds())})
+		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "hold_timeout_reached", Detail: fmt.Sprintf("首字等待超时=%dms 已到期", cfg.HoldTimeout.Milliseconds())})
 	}
 	switch verdict {
 	case ConsoleGuardWithhold:

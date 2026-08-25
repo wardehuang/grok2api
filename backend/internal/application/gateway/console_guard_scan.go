@@ -57,30 +57,55 @@ type consoleGuardReadResult struct {
 }
 
 type consoleGuardNoDataWatch struct {
+	mu       sync.Mutex
 	timer    *time.Timer
 	cancel   context.CancelCauseFunc
-	stopOnce sync.Once
+	deadline time.Time
+	stopped  bool
 }
 
 func newConsoleGuardNoDataWatch(parent context.Context) (context.Context, *consoleGuardNoDataWatch) {
 	attemptCtx, cancel := context.WithCancelCause(parent)
-	watch := &consoleGuardNoDataWatch{cancel: cancel}
-	watch.timer = time.AfterFunc(consoleGuardNoDataTimeout, func() {
-		cancel(errConsoleGuardNoDataTimeout)
-	})
+	watch := &consoleGuardNoDataWatch{cancel: cancel, deadline: time.Now().Add(consoleGuardNoDataTimeout)}
+	watch.timer = time.AfterFunc(consoleGuardNoDataTimeout, watch.expire)
 	return attemptCtx, watch
 }
 
-func (w *consoleGuardNoDataWatch) markFirstByte() {
-	w.stopOnce.Do(func() {
-		w.timer.Stop()
-	})
+func (w *consoleGuardNoDataWatch) expire() {
+	w.mu.Lock()
+	if w.stopped {
+		w.mu.Unlock()
+		return
+	}
+	if remaining := time.Until(w.deadline); remaining > 0 {
+		w.timer.Reset(remaining)
+		w.mu.Unlock()
+		return
+	}
+	w.stopped = true
+	w.mu.Unlock()
+	w.cancel(errConsoleGuardNoDataTimeout)
+}
+
+func (w *consoleGuardNoDataWatch) markData() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.stopped {
+		return
+	}
+	w.deadline = time.Now().Add(consoleGuardNoDataTimeout)
+	w.timer.Reset(consoleGuardNoDataTimeout)
 }
 
 func (w *consoleGuardNoDataWatch) cancelAttempt() {
-	w.stopOnce.Do(func() {
-		w.timer.Stop()
-	})
+	w.mu.Lock()
+	if w.stopped {
+		w.mu.Unlock()
+		return
+	}
+	w.stopped = true
+	w.timer.Stop()
+	w.mu.Unlock()
 	w.cancel(nil)
 }
 
@@ -93,7 +118,7 @@ type consoleGuardNoDataReadCloser struct {
 func (r *consoleGuardNoDataReadCloser) Read(buffer []byte) (int, error) {
 	n, err := r.ReadCloser.Read(buffer)
 	if n > 0 {
-		r.watch.markFirstByte()
+		r.watch.markData()
 	}
 	return n, err
 }
@@ -529,14 +554,21 @@ func peekConsoleGuardStream(ctx context.Context, body io.ReadCloser, protocol st
 	state := consoleGuardScanState{protocol: protocol, startedAt: requestStartedAt}
 	var held bytes.Buffer
 	holdTimer := time.NewTimer(cfg.HoldTimeout)
+	holdTimerC := holdTimer.C
 	defer holdTimer.Stop()
 	for {
+		// 首字在 holdTimeout 内出现后，继续扣流到流结束才结算，保证
+		// response.completed 里的上游 usage 进入事件；只有首字超时会 mid-stream withhold。
 		sig := state.signals()
-		if verdict := ClassifyConsoleGuardHold(sig, cfg); verdict != ConsoleGuardWait {
-			return newConsoleGuardPrefixReplay(&held, pump), verdict, state.usage, sig, nil
+		if sig.FirstVisibleObserved && holdTimerC != nil {
+			if !holdTimer.Stop() {
+				select {
+				case <-holdTimerC:
+				default:
+				}
+			}
+			holdTimerC = nil
 		}
-		// 已 terminal 的空流必须立即轮换：在 response.completed / [DONE] 之后
-		// 继续等 idle timeout 会把 HTTP 200 + 0 token 暴露给下游。
 		if sig.Terminal {
 			return finishConsoleGuardPeek(&held, pump, &state, cfg)
 		}
@@ -545,11 +577,12 @@ func peekConsoleGuardStream(ctx context.Context, body io.ReadCloser, protocol st
 		case <-ctx.Done():
 			_ = pump.Close()
 			return io.NopCloser(bytes.NewReader(held.Bytes())), ConsoleGuardWait, state.usage, sig, consoleGuardPeekAbortError(ctx, ctx.Err())
-		case <-holdTimer.C:
+		case <-holdTimerC:
 			sig.HoldExpired = true
-			if verdict := ClassifyConsoleGuardHold(sig, cfg); verdict != ConsoleGuardWait {
-				return newConsoleGuardPrefixReplay(&held, pump), verdict, state.usage, sig, nil
+			if !sig.FirstVisibleObserved {
+				return newConsoleGuardPrefixReplay(&held, pump), ConsoleGuardWithhold, state.usage, sig, nil
 			}
+			holdTimerC = nil
 		case result, ok := <-pump.results:
 			if !ok {
 				return finishConsoleGuardPeek(&held, pump, &state, cfg)

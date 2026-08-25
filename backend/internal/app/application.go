@@ -507,7 +507,7 @@ func qualityRetryRuntime(value config.QualityGuardRequestRetryConfig) gateway.Qu
 
 func consoleGuardRuntime(value config.ConsoleGuardConfig) gateway.ConsoleGuardRuntime {
 	return gateway.ConsoleGuardRuntime{
-		Enabled: value.Enabled, SoftTPS: value.SoftTPS, HardTPS: value.HardTPS,
+		Enabled: value.Enabled, HoldTimeout: value.HoldTimeout.Value(), SoftTPS: value.SoftTPS, HardTPS: value.HardTPS,
 		FirstTokenThresholdMS: value.FirstTokenThresholdMS, GenerationWindowThresholdMS: value.GenerationWindowThresholdMS, MinOutputReasoningTokens: value.MinOutputReasoningTokens,
 		RecordNonDegradedEvents: value.RecordNonDegradedEvents, RecordNonDegradedEventsSet: true, DegradedEgressNodeFilePath: value.DegradedEgressNodeFilePath,
 	}

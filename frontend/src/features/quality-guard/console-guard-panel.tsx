@@ -11,12 +11,14 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { getConsoleGuardProxyFilePreview, getSettings, updateSettings } from "@/features/settings/settings-api";
 import { ConsoleGuardEvents } from "@/features/settings/console-guard-events";
+import { durationSeconds, parseDuration } from "@/features/settings/settings-model";
 import { ErrorState } from "@/shared/components/data-state";
 
 export function ConsoleGuardPanel() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: getSettings });
+  const [holdTimeoutSeconds, setHoldTimeoutSeconds] = useState<number | "">(30);
   const [softTPS, setSoftTPS] = useState<number | "">(500);
   const [hardTPS, setHardTPS] = useState<number | "">(1000);
   const [firstTokenThresholdMS, setFirstTokenThresholdMS] = useState<number | "">(5000);
@@ -30,6 +32,7 @@ export function ConsoleGuardPanel() {
     if (!settingsQuery.data) return;
     const cg = settingsQuery.data.config.consoleGuard;
     debugLog("settings snapshot applied", { revision: settingsQuery.data.revision, recordNonDegradedEvents: cg.recordNonDegradedEvents, updatedAt: settingsQuery.data.updatedAt });
+    setHoldTimeoutSeconds(durationSeconds(parseDuration(cg.holdTimeout)));
     setSoftTPS(cg.softTPS);
     setHardTPS(cg.hardTPS);
     setFirstTokenThresholdMS(cg.firstTokenThresholdMS);
@@ -57,7 +60,7 @@ export function ConsoleGuardPanel() {
       const snapshot = settingsQuery.data!;
       return updateSettings(snapshot.revision, {
         ...snapshot.config,
-        consoleGuard: { ...snapshot.config.consoleGuard, softTPS: Number(softTPS), hardTPS: Number(hardTPS), firstTokenThresholdMS: Number(firstTokenThresholdMS), generationWindowThresholdMS: Number(generationWindowThresholdMS), minOutputReasoningTokens: Number(minOutputReasoningTokens) },
+        consoleGuard: { ...snapshot.config.consoleGuard, holdTimeout: `${Number(holdTimeoutSeconds)}s`, softTPS: Number(softTPS), hardTPS: Number(hardTPS), firstTokenThresholdMS: Number(firstTokenThresholdMS), generationWindowThresholdMS: Number(generationWindowThresholdMS), minOutputReasoningTokens: Number(minOutputReasoningTokens) },
       });
     },
     onSuccess: (snapshot) => {
@@ -110,14 +113,15 @@ export function ConsoleGuardPanel() {
   if (settingsQuery.isPending) return <div className="flex min-h-32 items-center justify-center"><Spinner /></div>;
 
   const enabled = settingsQuery.data!.config.consoleGuard.enabled;
+  const savedHoldTimeoutSeconds = durationSeconds(parseDuration(settingsQuery.data!.config.consoleGuard.holdTimeout));
   const savedSoftTPS = settingsQuery.data!.config.consoleGuard.softTPS;
   const savedHardTPS = settingsQuery.data!.config.consoleGuard.hardTPS;
   const savedFirstTokenThresholdMS = settingsQuery.data!.config.consoleGuard.firstTokenThresholdMS;
   const savedGenerationWindowThresholdMS = settingsQuery.data!.config.consoleGuard.generationWindowThresholdMS;
   const savedMinOutputReasoningTokens = settingsQuery.data!.config.consoleGuard.minOutputReasoningTokens;
   const savedDegradedEgressNodeFilePath = settingsQuery.data!.config.consoleGuard.degradedEgressNodeFilePath;
-  const thresholdsValid = typeof softTPS === "number" && Number.isFinite(softTPS) && softTPS >= 1 && softTPS <= 10_000 && typeof hardTPS === "number" && Number.isFinite(hardTPS) && hardTPS > softTPS && hardTPS <= 10_000 && typeof firstTokenThresholdMS === "number" && Number.isInteger(firstTokenThresholdMS) && firstTokenThresholdMS >= 1 && typeof generationWindowThresholdMS === "number" && Number.isInteger(generationWindowThresholdMS) && generationWindowThresholdMS >= 1 && typeof minOutputReasoningTokens === "number" && Number.isInteger(minOutputReasoningTokens) && minOutputReasoningTokens >= 1;
-  const thresholdsDirty = softTPS !== savedSoftTPS || hardTPS !== savedHardTPS || firstTokenThresholdMS !== savedFirstTokenThresholdMS || generationWindowThresholdMS !== savedGenerationWindowThresholdMS || minOutputReasoningTokens !== savedMinOutputReasoningTokens;
+  const thresholdsValid = typeof holdTimeoutSeconds === "number" && Number.isInteger(holdTimeoutSeconds) && holdTimeoutSeconds >= 1 && holdTimeoutSeconds <= 600 && typeof softTPS === "number" && Number.isFinite(softTPS) && softTPS >= 1 && softTPS <= 10_000 && typeof hardTPS === "number" && Number.isFinite(hardTPS) && hardTPS > softTPS && hardTPS <= 10_000 && typeof firstTokenThresholdMS === "number" && Number.isInteger(firstTokenThresholdMS) && firstTokenThresholdMS >= 1 && typeof generationWindowThresholdMS === "number" && Number.isInteger(generationWindowThresholdMS) && generationWindowThresholdMS >= 1 && typeof minOutputReasoningTokens === "number" && Number.isInteger(minOutputReasoningTokens) && minOutputReasoningTokens >= 1;
+  const thresholdsDirty = holdTimeoutSeconds !== savedHoldTimeoutSeconds || softTPS !== savedSoftTPS || hardTPS !== savedHardTPS || firstTokenThresholdMS !== savedFirstTokenThresholdMS || generationWindowThresholdMS !== savedGenerationWindowThresholdMS || minOutputReasoningTokens !== savedMinOutputReasoningTokens;
   const proxyFilePathValid = degradedEgressNodeFilePath.trim().length > 0 && degradedEgressNodeFilePath.trim().length <= 4096;
   const proxyFilePathDirty = degradedEgressNodeFilePath !== savedDegradedEgressNodeFilePath;
   return (
@@ -173,6 +177,10 @@ export function ConsoleGuardPanel() {
         </div>
         <div className="space-y-4 p-4 sm:p-5">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <label className="space-y-1.5 text-sm">
+              <span>{t("qualityGuard.consoleGuard.holdTimeoutSeconds")}</span>
+              <Input type="number" min={1} max={600} step={1} value={holdTimeoutSeconds} onChange={(event) => setHoldTimeoutSeconds(event.currentTarget.value === "" ? "" : event.currentTarget.valueAsNumber)} />
+            </label>
             <label className="space-y-1.5 text-sm">
               <span>{t("qualityGuard.consoleGuard.softTPS")}</span>
               <Input type="number" min={1} max={10_000} step="any" value={softTPS} onChange={(event) => setSoftTPS(event.currentTarget.value === "" ? "" : event.currentTarget.valueAsNumber)} />

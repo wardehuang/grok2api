@@ -289,37 +289,37 @@ func TestShouldHoldConsoleGuardStreamGates(t *testing.T) {
 	t.Parallel()
 	route := consoleGuardTestRoute(accountdomain.ProviderConsole)
 	input := Input{Streaming: true, PublicModel: "grok-4.6"}
-	if !shouldHoldConsoleGuardStream(input, nil, route, audit.OperationChat, consoleGuardTestCfg) {
+	if consoleGuardSkipReason(input, nil, route, audit.OperationChat, consoleGuardTestCfg) != "" {
 		t.Fatal("expected hold on console chat")
 	}
 	buildRoute := consoleGuardTestRoute(accountdomain.ProviderBuild)
-	if shouldHoldConsoleGuardStream(input, nil, buildRoute, audit.OperationChat, consoleGuardTestCfg) {
+	if consoleGuardSkipReason(input, nil, buildRoute, audit.OperationChat, consoleGuardTestCfg) == "" {
 		t.Fatal("build must not be guarded by console guard")
 	}
 	webRoute := consoleGuardTestRoute(accountdomain.ProviderWeb)
-	if shouldHoldConsoleGuardStream(input, nil, webRoute, audit.OperationChat, consoleGuardTestCfg) {
+	if consoleGuardSkipReason(input, nil, webRoute, audit.OperationChat, consoleGuardTestCfg) == "" {
 		t.Fatal("web must not be guarded by console guard")
 	}
 	off := consoleGuardTestCfg
 	off.Enabled = false
-	if shouldHoldConsoleGuardStream(input, nil, route, audit.OperationChat, off) {
+	if consoleGuardSkipReason(input, nil, route, audit.OperationChat, off) == "" {
 		t.Fatal("disabled must not hold")
 	}
 	forced := input
 	forced.ForcedEgressNodeID = 9
-	if shouldHoldConsoleGuardStream(forced, nil, route, audit.OperationChat, consoleGuardTestCfg) {
+	if consoleGuardSkipReason(forced, nil, route, audit.OperationChat, consoleGuardTestCfg) == "" {
 		t.Fatal("forced egress must not hold")
 	}
 	owned := inferencedomain.ResponseOwnership{ResponseID: "r1", AccountID: 1}
-	if shouldHoldConsoleGuardStream(input, &owned, route, audit.OperationChat, consoleGuardTestCfg) {
+	if consoleGuardSkipReason(input, &owned, route, audit.OperationChat, consoleGuardTestCfg) == "" {
 		t.Fatal("pinned response must not hold")
 	}
-	if shouldHoldConsoleGuardStream(input, nil, route, audit.OperationImage, consoleGuardTestCfg) {
+	if consoleGuardSkipReason(input, nil, route, audit.OperationImage, consoleGuardTestCfg) == "" {
 		t.Fatal("image must not hold")
 	}
 	classified := input
 	classified.skipQualityHold = true
-	if shouldHoldConsoleGuardStream(classified, nil, route, audit.OperationResponses, consoleGuardTestCfg) {
+	if consoleGuardSkipReason(classified, nil, route, audit.OperationResponses, consoleGuardTestCfg) == "" {
 		t.Fatal("gateway-classified compaction must not hold")
 	}
 	for _, test := range []struct {
@@ -334,7 +334,7 @@ func TestShouldHoldConsoleGuardStreamGates(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			request := input
 			request.Body = []byte(test.body)
-			if shouldHoldConsoleGuardStream(request, nil, route, audit.OperationChat, consoleGuardTestCfg) {
+			if consoleGuardSkipReason(request, nil, route, audit.OperationChat, consoleGuardTestCfg) == "" {
 				t.Fatal("explicitly disabled reasoning must not be held")
 			}
 		})

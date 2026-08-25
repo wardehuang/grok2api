@@ -144,6 +144,7 @@ type accountsConfigDTO struct {
 
 type consoleGuardConfigDTO struct {
 	Enabled                     *bool    `json:"enabled,omitempty"`
+	HoldTimeout                 *string  `json:"holdTimeout,omitempty"`
 	SoftTPS                     *float64 `json:"softTPS,omitempty"`
 	HardTPS                     *float64 `json:"hardTPS,omitempty"`
 	FirstTokenThresholdMS       *int64   `json:"firstTokenThresholdMS,omitempty"`
@@ -320,12 +321,14 @@ func (value settingsConfigDTO) toApplication() settingsapp.EditableConfig {
 	if value.ConsoleGuard != nil {
 		result.ConsoleGuard = settingsapp.ConsoleGuardConfig{
 			Enabled:                             boolValue(value.ConsoleGuard.Enabled),
+			HoldTimeout:                         optionalString(value.ConsoleGuard.HoldTimeout),
 			SoftTPS:                             floatValue(value.ConsoleGuard.SoftTPS),
 			HardTPS:                             floatValue(value.ConsoleGuard.HardTPS),
 			FirstTokenThresholdMS:               int64Value(value.ConsoleGuard.FirstTokenThresholdMS),
 			GenerationWindowThresholdMS:         int64Value(value.ConsoleGuard.GenerationWindowThresholdMS),
 			MinOutputReasoningTokens:            int64Value(value.ConsoleGuard.MinOutputReasoningTokens),
 			EnabledProvided:                     value.ConsoleGuard.Enabled != nil,
+			HoldTimeoutProvided:                 value.ConsoleGuard.HoldTimeout != nil,
 			SoftTPSProvided:                     value.ConsoleGuard.SoftTPS != nil,
 			HardTPSProvided:                     value.ConsoleGuard.HardTPS != nil,
 			FirstTokenThresholdMSProvided:       value.ConsoleGuard.FirstTokenThresholdMS != nil,
@@ -336,7 +339,7 @@ func (value settingsConfigDTO) toApplication() settingsapp.EditableConfig {
 			DegradedEgressNodeFilePath:          optionalString(value.ConsoleGuard.DegradedEgressNodeFilePath),
 			DegradedEgressNodeFilePathProvided:  value.ConsoleGuard.DegradedEgressNodeFilePath != nil,
 		}
-		result.ConsoleGuardProvided = result.ConsoleGuard.EnabledProvided || result.ConsoleGuard.SoftTPSProvided || result.ConsoleGuard.HardTPSProvided || result.ConsoleGuard.FirstTokenThresholdMSProvided || result.ConsoleGuard.GenerationWindowThresholdMSProvided || result.ConsoleGuard.MinOutputReasoningTokensProvided || result.ConsoleGuard.RecordNonDegradedEventsProvided || result.ConsoleGuard.DegradedEgressNodeFilePathProvided
+		result.ConsoleGuardProvided = result.ConsoleGuard.EnabledProvided || result.ConsoleGuard.HoldTimeoutProvided || result.ConsoleGuard.SoftTPSProvided || result.ConsoleGuard.HardTPSProvided || result.ConsoleGuard.FirstTokenThresholdMSProvided || result.ConsoleGuard.GenerationWindowThresholdMSProvided || result.ConsoleGuard.MinOutputReasoningTokensProvided || result.ConsoleGuard.RecordNonDegradedEventsProvided || result.ConsoleGuard.DegradedEgressNodeFilePathProvided
 	}
 	return result
 }
@@ -409,7 +412,7 @@ func newSettingsResponse(value settingsapp.Snapshot) settingsResponse {
 				AutoCleanReauthMinAge:                config.Accounts.AutoCleanReauthMinAge,
 				AutoCleanIncludeDisabled:             config.Accounts.AutoCleanIncludeDisabled,
 			},
-			ConsoleGuard: &consoleGuardConfigDTO{Enabled: boolPointer(config.ConsoleGuard.Enabled), SoftTPS: floatPointer(config.ConsoleGuard.SoftTPS), HardTPS: floatPointer(config.ConsoleGuard.HardTPS), FirstTokenThresholdMS: int64Pointer(config.ConsoleGuard.FirstTokenThresholdMS), GenerationWindowThresholdMS: int64Pointer(config.ConsoleGuard.GenerationWindowThresholdMS), MinOutputReasoningTokens: int64Pointer(config.ConsoleGuard.MinOutputReasoningTokens), RecordNonDegradedEvents: boolPointer(config.ConsoleGuard.RecordNonDegradedEvents), DegradedEgressNodeFilePath: stringPointer(config.ConsoleGuard.DegradedEgressNodeFilePath)},
+			ConsoleGuard: &consoleGuardConfigDTO{Enabled: boolPointer(config.ConsoleGuard.Enabled), HoldTimeout: stringPointer(config.ConsoleGuard.HoldTimeout), SoftTPS: floatPointer(config.ConsoleGuard.SoftTPS), HardTPS: floatPointer(config.ConsoleGuard.HardTPS), FirstTokenThresholdMS: int64Pointer(config.ConsoleGuard.FirstTokenThresholdMS), GenerationWindowThresholdMS: int64Pointer(config.ConsoleGuard.GenerationWindowThresholdMS), MinOutputReasoningTokens: int64Pointer(config.ConsoleGuard.MinOutputReasoningTokens), RecordNonDegradedEvents: boolPointer(config.ConsoleGuard.RecordNonDegradedEvents), DegradedEgressNodeFilePath: stringPointer(config.ConsoleGuard.DegradedEgressNodeFilePath)},
 		},
 		RecommendedProviderBuild: providerBuildRecommendationDTO{
 			ClientVersion: value.RecommendedProviderBuild.ClientVersion,

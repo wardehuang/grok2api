@@ -155,6 +155,7 @@ type AccountsConfig struct {
 // ConsoleGuardConfig 是管理接口使用的 Console 降智防护输入。
 type ConsoleGuardConfig struct {
 	Enabled                             bool
+	HoldTimeout                         string
 	SoftTPS                             float64
 	HardTPS                             float64
 	FirstTokenThresholdMS               int64
@@ -163,6 +164,7 @@ type ConsoleGuardConfig struct {
 	RecordNonDegradedEvents             bool
 	DegradedEgressNodeFilePath          string
 	EnabledProvided                     bool
+	HoldTimeoutProvided                 bool
 	SoftTPSProvided                     bool
 	HardTPSProvided                     bool
 	FirstTokenThresholdMSProvided       bool
@@ -486,6 +488,9 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 	base.Accounts.ExcludeBuildBotFlaggedFromScheduling = value.Accounts.ExcludeBuildBotFlaggedFromScheduling
 	// ConsoleGuard 为后续新增段；旧持久化缺字段时沿用当前配置（含文件默认）。
 	base.ConsoleGuard.Enabled = base.ConsoleGuard.Enabled || value.ConsoleGuard.Enabled
+	if value.ConsoleGuard.HoldTimeout > 0 {
+		base.ConsoleGuard.HoldTimeout = config.Duration(value.ConsoleGuard.HoldTimeout)
+	}
 	if value.ConsoleGuard.SoftTPS > 0 {
 		base.ConsoleGuard.SoftTPS = value.ConsoleGuard.SoftTPS
 	}
@@ -579,7 +584,7 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 			AutoCleanReauthMinAge:                value.Accounts.AutoCleanReauthMinAge.Value(),
 			AutoCleanIncludeDisabled:             value.Accounts.AutoCleanIncludeDisabled,
 		},
-		ConsoleGuard: settingsdomain.ConsoleGuardConfig{Enabled: value.ConsoleGuard.Enabled, SoftTPS: value.ConsoleGuard.SoftTPS, HardTPS: value.ConsoleGuard.HardTPS, FirstTokenThresholdMS: value.ConsoleGuard.FirstTokenThresholdMS, GenerationWindowThresholdMS: value.ConsoleGuard.GenerationWindowThresholdMS, MinOutputReasoningTokens: value.ConsoleGuard.MinOutputReasoningTokens, RecordNonDegradedEvents: &recordNonDegradedEvents, DegradedEgressNodeFilePath: value.ConsoleGuard.DegradedEgressNodeFilePath},
+		ConsoleGuard: settingsdomain.ConsoleGuardConfig{Enabled: value.ConsoleGuard.Enabled, HoldTimeout: value.ConsoleGuard.HoldTimeout.Value(), SoftTPS: value.ConsoleGuard.SoftTPS, HardTPS: value.ConsoleGuard.HardTPS, FirstTokenThresholdMS: value.ConsoleGuard.FirstTokenThresholdMS, GenerationWindowThresholdMS: value.ConsoleGuard.GenerationWindowThresholdMS, MinOutputReasoningTokens: value.ConsoleGuard.MinOutputReasoningTokens, RecordNonDegradedEvents: &recordNonDegradedEvents, DegradedEgressNodeFilePath: value.ConsoleGuard.DegradedEgressNodeFilePath},
 	}
 }
 
@@ -725,6 +730,9 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 		{"media.cleanupInterval", input.Media.CleanupInterval, func(value config.Duration) { next.Media.CleanupInterval = value }},
 		{"batch.randomDelay", input.Batch.RandomDelay, func(value config.Duration) { next.Batch.RandomDelay = value }},
 	}
+	if input.ConsoleGuardProvided && input.ConsoleGuard.HoldTimeoutProvided {
+		durations = append(durations, durationInput{"consoleGuard.holdTimeout", input.ConsoleGuard.HoldTimeout, func(value config.Duration) { next.ConsoleGuard.HoldTimeout = value }})
+	}
 	if strings.TrimSpace(input.ProviderBuild.ResponseHeaderTimeout) != "" {
 		durations = append(durations, durationInput{"providerBuild.responseHeaderTimeout", input.ProviderBuild.ResponseHeaderTimeout, func(value config.Duration) { next.Provider.Build.ResponseHeaderTimeout = value }})
 	}
@@ -841,7 +849,7 @@ func toEditable(cfg config.Config) EditableConfig {
 			AutoCleanReauthMinAge:                        cfg.Accounts.AutoCleanReauthMinAge.String(),
 			AutoCleanIncludeDisabled:                     cfg.Accounts.AutoCleanIncludeDisabled,
 		},
-		ConsoleGuard:         ConsoleGuardConfig{Enabled: cfg.ConsoleGuard.Enabled, SoftTPS: cfg.ConsoleGuard.SoftTPS, HardTPS: cfg.ConsoleGuard.HardTPS, FirstTokenThresholdMS: cfg.ConsoleGuard.FirstTokenThresholdMS, GenerationWindowThresholdMS: cfg.ConsoleGuard.GenerationWindowThresholdMS, MinOutputReasoningTokens: cfg.ConsoleGuard.MinOutputReasoningTokens, RecordNonDegradedEvents: cfg.ConsoleGuard.RecordNonDegradedEvents, DegradedEgressNodeFilePath: cfg.ConsoleGuard.DegradedEgressNodeFilePath, EnabledProvided: true, SoftTPSProvided: true, HardTPSProvided: true, FirstTokenThresholdMSProvided: true, GenerationWindowThresholdMSProvided: true, MinOutputReasoningTokensProvided: true, RecordNonDegradedEventsProvided: true, DegradedEgressNodeFilePathProvided: true},
+		ConsoleGuard:         ConsoleGuardConfig{Enabled: cfg.ConsoleGuard.Enabled, HoldTimeout: cfg.ConsoleGuard.HoldTimeout.String(), SoftTPS: cfg.ConsoleGuard.SoftTPS, HardTPS: cfg.ConsoleGuard.HardTPS, FirstTokenThresholdMS: cfg.ConsoleGuard.FirstTokenThresholdMS, GenerationWindowThresholdMS: cfg.ConsoleGuard.GenerationWindowThresholdMS, MinOutputReasoningTokens: cfg.ConsoleGuard.MinOutputReasoningTokens, RecordNonDegradedEvents: cfg.ConsoleGuard.RecordNonDegradedEvents, DegradedEgressNodeFilePath: cfg.ConsoleGuard.DegradedEgressNodeFilePath, EnabledProvided: true, HoldTimeoutProvided: true, SoftTPSProvided: true, HardTPSProvided: true, FirstTokenThresholdMSProvided: true, GenerationWindowThresholdMSProvided: true, MinOutputReasoningTokensProvided: true, RecordNonDegradedEventsProvided: true, DegradedEgressNodeFilePathProvided: true},
 		ConsoleGuardProvided: true,
 		AccountsProvided:     true,
 	}

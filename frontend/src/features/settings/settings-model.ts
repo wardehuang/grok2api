@@ -178,6 +178,10 @@ export const settingsSchema = z.object({
   }),
   consoleGuard: z.object({
     enabled: z.boolean(),
+    holdTimeout: durationSchema.refine((value) => {
+      const seconds = durationSeconds(value);
+      return seconds >= 1 && seconds <= 600;
+    }),
     softTPS: z.number().min(1).max(10_000),
     hardTPS: z.number().min(1).max(10_000),
     firstTokenThresholdMS: z.number().int().min(1),
@@ -234,6 +238,7 @@ export function toSettingsForm(config: SettingsConfigDTO): SettingsForm {
     },
     consoleGuard: {
       enabled: config.consoleGuard.enabled,
+      holdTimeout: parseDuration(config.consoleGuard.holdTimeout),
       softTPS: config.consoleGuard.softTPS,
       hardTPS: config.consoleGuard.hardTPS,
       firstTokenThresholdMS: config.consoleGuard.firstTokenThresholdMS,
@@ -288,6 +293,7 @@ export function toSettingsDTO(config: SettingsForm): SettingsConfigDTO {
     },
     consoleGuard: {
       enabled: config.consoleGuard.enabled,
+      holdTimeout: formatDuration(config.consoleGuard.holdTimeout),
       softTPS: config.consoleGuard.softTPS,
       hardTPS: config.consoleGuard.hardTPS,
       firstTokenThresholdMS: config.consoleGuard.firstTokenThresholdMS,
@@ -316,7 +322,7 @@ function parseByteSize(bytes: number): ByteSizeValue {
   return { value: bytes / 2 ** 20, unit: "MiB" };
 }
 
-function durationSeconds(value: DurationValue): number {
+export function durationSeconds(value: DurationValue): number {
   const factors: Record<DurationUnit, number> = { s: 1, m: 60, h: 3_600, d: 86_400 };
   return value.value * factors[value.unit];
 }
@@ -326,7 +332,7 @@ function formatDuration(value: DurationValue): string {
   return `${value.value}${value.unit}`;
 }
 
-function parseDuration(value: string): DurationValue {
+export function parseDuration(value: string): DurationValue {
   const simple = value.match(/^(\d+(?:\.\d+)?)(ms|s|m|h)$/);
   if (simple) {
     const amount = Number(simple[1]);

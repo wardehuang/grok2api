@@ -37,6 +37,7 @@ export type SettingsConfigDTO = {
   };
   consoleGuard: {
     enabled: boolean;
+    holdTimeout: string;
     softTPS: number;
     hardTPS: number;
     firstTokenThresholdMS: number;
@@ -160,6 +161,7 @@ const settingsConfigValidator = hasShape({
   // Older backends may omit consoleGuard; withSettingsDefaults supplies a safe local default.
   consoleGuard: isOptional(hasShape({
     enabled: isBoolean,
+    holdTimeout: isOptional(isString),
     softTPS: isOptional(isNumber),
     hardTPS: isOptional(isNumber),
     firstTokenThresholdMS: isOptional(isNumber),
@@ -180,6 +182,7 @@ const defaultAccountsConfig = (): SettingsConfigDTO["accounts"] => ({
 });
 const defaultConsoleGuardConfig = (): SettingsConfigDTO["consoleGuard"] => ({
   enabled: false,
+  holdTimeout: "30s",
   softTPS: 500,
   hardTPS: 1000,
   firstTokenThresholdMS: 5000,
@@ -230,6 +233,7 @@ function withSettingsDefaults(snapshot: SettingsSnapshotDTO): SettingsSnapshotDT
       },
       consoleGuard: {
         enabled: consoleGuard.enabled ?? false,
+        holdTimeout: consoleGuard.holdTimeout || "30s",
         softTPS: consoleGuard.softTPS ?? 500,
         hardTPS: consoleGuard.hardTPS ?? 1000,
         firstTokenThresholdMS: consoleGuard.firstTokenThresholdMS ?? 5000,

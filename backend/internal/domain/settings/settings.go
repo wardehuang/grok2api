@@ -154,9 +154,10 @@ type AccountsConfig struct {
 	AutoCleanIncludeDisabled bool
 }
 
-// ConsoleGuardConfig 定义 Console 账号降智防护开关、TPS 和慢首字 burst 判定阈值。
+// ConsoleGuardConfig 定义 Console 账号降智防护开关、hold 窗口、TPS 和慢首字 burst 判定阈值。
 type ConsoleGuardConfig struct {
 	Enabled                     bool
+	HoldTimeout                 time.Duration
 	SoftTPS                     float64
 	HardTPS                     float64
 	FirstTokenThresholdMS       int64

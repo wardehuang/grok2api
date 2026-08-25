@@ -173,6 +173,8 @@ qualityGuard:
 # 命中降智的 Console 账号会立即停用，需管理员手动恢复。
 consoleGuard:
   enabled: false
+  # 仅限制首字等待；首字及时出现后继续扣住整条流到结束，不受该时长限制。
+  holdTimeout: 30s
   softTPS: 500
   hardTPS: 1000
   firstTokenThresholdMS: 5000
