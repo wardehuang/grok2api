@@ -56,6 +56,54 @@ type consoleGuardReadResult struct {
 	err  error
 }
 
+type consoleGuardNoDataWatch struct {
+	timer    *time.Timer
+	cancel   context.CancelCauseFunc
+	stopOnce sync.Once
+}
+
+func newConsoleGuardNoDataWatch(parent context.Context) (context.Context, *consoleGuardNoDataWatch) {
+	attemptCtx, cancel := context.WithCancelCause(parent)
+	watch := &consoleGuardNoDataWatch{cancel: cancel}
+	watch.timer = time.AfterFunc(consoleGuardNoDataTimeout, func() {
+		cancel(errConsoleGuardNoDataTimeout)
+	})
+	return attemptCtx, watch
+}
+
+func (w *consoleGuardNoDataWatch) markFirstByte() {
+	w.stopOnce.Do(func() {
+		w.timer.Stop()
+	})
+}
+
+func (w *consoleGuardNoDataWatch) cancelAttempt() {
+	w.stopOnce.Do(func() {
+		w.timer.Stop()
+	})
+	w.cancel(nil)
+}
+
+type consoleGuardNoDataReadCloser struct {
+	io.ReadCloser
+	watch     *consoleGuardNoDataWatch
+	closeOnce sync.Once
+}
+
+func (r *consoleGuardNoDataReadCloser) Read(buffer []byte) (int, error) {
+	n, err := r.ReadCloser.Read(buffer)
+	if n > 0 {
+		r.watch.markFirstByte()
+	}
+	return n, err
+}
+
+func (r *consoleGuardNoDataReadCloser) Close() error {
+	err := r.ReadCloser.Close()
+	r.closeOnce.Do(r.watch.cancelAttempt)
+	return err
+}
+
 // consoleGuardReadPump 是上游 body 的唯一读者。扣流计时器可以在上游 Read 阻塞时
 // 获胜；放行后它继续作为响应体的续读通道。
 type consoleGuardReadPump struct {

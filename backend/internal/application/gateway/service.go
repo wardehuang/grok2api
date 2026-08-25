@@ -1089,14 +1089,34 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 	failureAttempts := newFailureAttemptRecorder(http.MethodPost, path)
 	normalizedMetadata := &provider.NormalizedRequestMetadata{}
 	responseStartedAt := startedAt
+	activeConsoleGuardCtx := physicalCallCtx
+	var activeConsoleGuardNoDataWatch *consoleGuardNoDataWatch
 	forwardResponse := func(lease *accountLease, credential accountdomain.Credential, billing *accountdomain.Billing) (*provider.Response, error) {
 		started := time.Now()
 		responseStartedAt = started
 		lease.markSelectorUpstreamStarted()
-		response, err := adapter.ForwardResponse(physicalCallCtx, provider.ResponseResourceRequest{Credential: credential, ForcedEgressNodeID: input.ForcedEgressNodeID, Billing: billing, Method: http.MethodPost, Path: path, Model: route.UpstreamModel, PromptCacheKey: input.PromptCacheKey, ReasoningReplayKey: reasoningReplayKey, AllowClientToolCacheRoute: input.AllowClientToolCacheRoute, GrokTurnIndex: input.GrokTurnIndex, IdempotencyID: idempotencyID, Body: input.Body, Streaming: input.Streaming, NormalizeBody: true, Operation: string(operation), NormalizedMetadata: normalizedMetadata})
+		callCtx := physicalCallCtx
+		var noDataWatch *consoleGuardNoDataWatch
+		if consoleGuardEnabled {
+			callCtx, noDataWatch = newConsoleGuardNoDataWatch(physicalCallCtx)
+		}
+		activeConsoleGuardCtx = callCtx
+		activeConsoleGuardNoDataWatch = noDataWatch
+		response, err := adapter.ForwardResponse(callCtx, provider.ResponseResourceRequest{Credential: credential, ForcedEgressNodeID: input.ForcedEgressNodeID, Billing: billing, Method: http.MethodPost, Path: path, Model: route.UpstreamModel, PromptCacheKey: input.PromptCacheKey, ReasoningReplayKey: reasoningReplayKey, AllowClientToolCacheRoute: input.AllowClientToolCacheRoute, GrokTurnIndex: input.GrokTurnIndex, IdempotencyID: idempotencyID, Body: input.Body, Streaming: input.Streaming, NormalizeBody: true, Operation: string(operation), NormalizedMetadata: normalizedMetadata})
 		auditBase.ReasoningEffort = normalizedMetadata.ReasoningEffort
 		err = failureAttempts.captureResponse(credential, started, response, err)
 		timing.markUpstream(time.Since(started))
+		if noDataWatch != nil {
+			if err != nil {
+				if !isConsoleGuardNoDataTimeout(callCtx, err) {
+					noDataWatch.cancelAttempt()
+				}
+			} else if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices && response.Body != nil {
+				response.Body = &consoleGuardNoDataReadCloser{ReadCloser: response.Body, watch: noDataWatch}
+			} else {
+				noDataWatch.cancelAttempt()
+			}
+		}
 		return response, err
 	}
 	ensureCredential := func(credential accountdomain.Credential, force bool) (accountdomain.Credential, error) {
@@ -1105,6 +1125,53 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 		failureAttempts.captureCredentialFailure(credential, started, force, err)
 		timing.markCredential(time.Since(started))
 		return result, err
+	}
+	recordConsoleGuardNoDataTimeout := func(credential accountdomain.Credential, usage Usage, signals ConsoleGuardSignals, attempt int, incrementAttempt bool) ConsoleGuardAction {
+		if incrementAttempt {
+			consoleGuardAttempts++
+		}
+		signals.HoldExpired = false
+		signals.Terminal = false
+		signals.TerminalEvent = "no_data_timeout"
+		signals.ObservationDurationMS = time.Since(responseStartedAt).Milliseconds()
+		hasNextAccount := attemptPolicy.hasNext(attempt) && selection.hasAvailableCandidate(excluded, !quotaProbeAttempted)
+		hasNextAccount = hasNextAccount && consoleGuardAttempts < consoleGuardMaxAttempts
+		commit := CommitConsoleGuardHold(ConsoleGuardWithhold, consoleGuardAttempts-1, consoleGuardMaxAttempts, hasNextAccount)
+		attemptDetail := buildConsoleGuardAttemptDetail(consoleGuardProtocol, signals, usage, consoleGuardCfg, ConsoleGuardWithhold, commit.Action, consoleGuardAttempts, time.Since(responseStartedAt).Milliseconds())
+		attemptDetail.AccountID = strconv.FormatUint(credential.ID, 10)
+		attemptDetail.AccountName = credential.Name
+		attemptDetail.DecisionReasons = append(attemptDetail.DecisionReasons, audit.ConsoleGuardEvidence{Code: "no_data_timeout", Detail: fmt.Sprintf("本次账号 attempt 从发起起连续 %d 秒未收到任何上游字节，按降智处理", int(consoleGuardNoDataTimeout/time.Second))})
+		consoleGuardAttemptDetails = append(consoleGuardAttemptDetails, *attemptDetail)
+		consoleGuardSawDegraded = true
+		consoleGuardRejected = commit.Action == ConsoleGuardActionReject
+		recordConsoleGuardDegraded(credential, usage, *attemptDetail)
+		s.disableConsoleGuardAccount(ctx, input.RequestID, credential)
+		if commit.Audit {
+			failureAttempts.captureQualityDegraded(credential, responseStartedAt)
+		}
+		if activeConsoleGuardNoDataWatch != nil {
+			activeConsoleGuardNoDataWatch.cancelAttempt()
+		}
+		lastErr = errQualityDegraded
+		lastFailure = &UpstreamFailure{
+			HTTPStatus: http.StatusServiceUnavailable, Code: ErrorQualityDegraded,
+			PublicMessage: "上游 60 秒未返回数据", AccountID: credential.ID, AccountName: credential.Name,
+			Cause: errQualityDegraded,
+		}
+		s.logger.Warn("console_guard_no_data_timeout",
+			"request_id", input.RequestID,
+			"model", route.UpstreamModel,
+			"public_model", input.PublicModel,
+			"operation", string(operation),
+			"protocol", consoleGuardProtocol,
+			"account_id", credential.ID,
+			"account_name", credential.Name,
+			"guard_attempt", consoleGuardAttempts,
+			"max_attempts", consoleGuardMaxAttempts,
+			"timeout_ms", consoleGuardNoDataTimeout.Milliseconds(),
+			"action", commit.Action,
+		)
+		return commit.Action
 	}
 	handoffResponse := func(response *provider.Response, lease *accountLease, credential accountdomain.Credential, upstreamStartedAt time.Time) *Result {
 		accountID := credential.ID
@@ -1342,6 +1409,14 @@ attemptLoop:
 		if err != nil {
 			lease.Release()
 			lastErr = err
+			if isConsoleGuardNoDataTimeout(activeConsoleGuardCtx, err) {
+				switch recordConsoleGuardNoDataTimeout(credential, Usage{}, ConsoleGuardSignals{}, attempt, true) {
+				case ConsoleGuardActionRetry:
+					continue
+				case ConsoleGuardActionReject:
+					break attemptLoop
+				}
+			}
 			if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 				lastFailure = &UpstreamFailure{HTTPStatus: 499, Code: "request_canceled", PublicMessage: "请求已取消", AccountID: credential.ID, AccountName: credential.Name, Cause: firstError(ctx.Err(), err)}
 				break
@@ -1576,6 +1651,14 @@ attemptLoop:
 				if err != nil {
 					lease.Release()
 					lastErr = err
+					if isConsoleGuardNoDataTimeout(activeConsoleGuardCtx, err) {
+						switch recordConsoleGuardNoDataTimeout(credential, Usage{}, ConsoleGuardSignals{}, attempt, true) {
+						case ConsoleGuardActionRetry:
+							continue attemptLoop
+						case ConsoleGuardActionReject:
+							break attemptLoop
+						}
+					}
 					if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 						lastFailure = &UpstreamFailure{HTTPStatus: 499, Code: "request_canceled", PublicMessage: "请求已取消", AccountID: credential.ID, AccountName: credential.Name, Cause: firstError(ctx.Err(), err)}
 						break attemptLoop
@@ -1655,7 +1738,7 @@ attemptLoop:
 		if response.StatusCode >= 200 && response.StatusCode < 300 {
 			s.selector.markSuccess(ctx, credential, lease.QuotaProbe)
 			if qualityHoldEnabled {
-				replay, verdict, peekUsage, _, peekErr := peekQualityStream(ctx, response.Body, qualityProtocolForOperation(operation), holdCfg)
+				replay, verdict, peekUsage, _, peekErr := peekQualityStream(activeConsoleGuardCtx, response.Body, qualityProtocolForOperation(operation), holdCfg)
 				if peekErr != nil {
 					if replay != nil {
 						_ = replay.Close()
@@ -1664,12 +1747,20 @@ attemptLoop:
 					}
 					lease.Release()
 					lastErr = peekErr
-					if isClientRequestCancel(ctx, peekErr) {
+					if isConsoleGuardNoDataTimeout(activeConsoleGuardCtx, peekErr) {
+						switch recordConsoleGuardNoDataTimeout(credential, peekUsage, ConsoleGuardSignals{}, attempt, true) {
+						case ConsoleGuardActionRetry:
+							continue
+						case ConsoleGuardActionReject:
+							break attemptLoop
+						}
+					}
+					if isClientRequestCancel(activeConsoleGuardCtx, peekErr) {
 						lastFailure = &UpstreamFailure{HTTPStatus: 499, Code: "request_canceled", PublicMessage: "请求已取消", AccountID: credential.ID, AccountName: credential.Name, Cause: firstError(ctx.Err(), peekErr)}
 						break
 					}
 					lastFailure = newTransportUpstreamFailure(peekErr, credential.ID, credential.Name)
-					if neterrorpkg.IsUpstreamStreamIdleTimeout(peekErr) || neterrorpkg.IsUpstreamStreamIdleTimeout(context.Cause(ctx)) || errors.Is(peekErr, errQualityEmptyStream) {
+					if neterrorpkg.IsUpstreamStreamIdleTimeout(peekErr) || neterrorpkg.IsUpstreamStreamIdleTimeout(context.Cause(activeConsoleGuardCtx)) || errors.Is(peekErr, errQualityEmptyStream) {
 						logPrefix := "quality_peek_idle"
 						if errors.Is(peekErr, errQualityEmptyStream) {
 							logPrefix = "quality_peek_empty"
@@ -1743,15 +1834,8 @@ attemptLoop:
 			}
 			if consoleGuardEnabled {
 				consoleGuardAttempts++
-				replay, verdict, peekUsage, holdSignals, peekErr := peekConsoleGuardStream(ctx, response.Body, consoleGuardProtocol, consoleGuardCfg, startedAt)
+				replay, verdict, peekUsage, holdSignals, peekErr := peekConsoleGuardStream(activeConsoleGuardCtx, response.Body, consoleGuardProtocol, consoleGuardCfg, startedAt)
 				if peekErr != nil {
-					errorDetail := buildConsoleGuardAttemptDetail(consoleGuardProtocol, holdSignals, peekUsage, consoleGuardCfg, ConsoleGuardWait, ConsoleGuardActionRetry, consoleGuardAttempts, time.Since(responseStartedAt).Milliseconds())
-					errorDetail.Verdict = "error"
-					errorDetail.DecisionReasons = append(errorDetail.DecisionReasons, audit.ConsoleGuardEvidence{Code: "peek_error", Detail: "流扫描失败，未完成本次 Console Guard 判定"})
-					accountID := strconv.FormatUint(credential.ID, 10)
-					errorDetail.AccountID = accountID
-					errorDetail.AccountName = credential.Name
-					consoleGuardAttemptDetails = append(consoleGuardAttemptDetails, *errorDetail)
 					if replay != nil {
 						_ = replay.Close()
 					} else {
@@ -1759,12 +1843,27 @@ attemptLoop:
 					}
 					lease.Release()
 					lastErr = peekErr
-					if isClientRequestCancel(ctx, peekErr) {
+					if isConsoleGuardNoDataTimeout(activeConsoleGuardCtx, peekErr) {
+						switch recordConsoleGuardNoDataTimeout(credential, peekUsage, holdSignals, attempt, false) {
+						case ConsoleGuardActionRetry:
+							continue
+						case ConsoleGuardActionReject:
+							break attemptLoop
+						}
+					}
+					errorDetail := buildConsoleGuardAttemptDetail(consoleGuardProtocol, holdSignals, peekUsage, consoleGuardCfg, ConsoleGuardWait, ConsoleGuardActionRetry, consoleGuardAttempts, time.Since(responseStartedAt).Milliseconds())
+					errorDetail.Verdict = "error"
+					errorDetail.DecisionReasons = append(errorDetail.DecisionReasons, audit.ConsoleGuardEvidence{Code: "peek_error", Detail: "流扫描失败，未完成本次 Console Guard 判定"})
+					accountID := strconv.FormatUint(credential.ID, 10)
+					errorDetail.AccountID = accountID
+					errorDetail.AccountName = credential.Name
+					consoleGuardAttemptDetails = append(consoleGuardAttemptDetails, *errorDetail)
+					if isClientRequestCancel(activeConsoleGuardCtx, peekErr) {
 						lastFailure = &UpstreamFailure{HTTPStatus: 499, Code: "request_canceled", PublicMessage: "请求已取消", AccountID: credential.ID, AccountName: credential.Name, Cause: firstError(ctx.Err(), peekErr)}
 						break
 					}
 					lastFailure = newTransportUpstreamFailure(peekErr, credential.ID, credential.Name)
-					if neterrorpkg.IsUpstreamStreamIdleTimeout(peekErr) || neterrorpkg.IsUpstreamStreamIdleTimeout(context.Cause(ctx)) || errors.Is(peekErr, errConsoleGuardEmptyStream) {
+					if neterrorpkg.IsUpstreamStreamIdleTimeout(peekErr) || neterrorpkg.IsUpstreamStreamIdleTimeout(context.Cause(activeConsoleGuardCtx)) || errors.Is(peekErr, errConsoleGuardEmptyStream) {
 						logPrefix := "console_guard_peek_idle"
 						if errors.Is(peekErr, errConsoleGuardEmptyStream) {
 							logPrefix = "console_guard_peek_empty"

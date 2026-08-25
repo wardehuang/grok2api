@@ -6,7 +6,7 @@ package gateway
 // quality_retry.go 忠实复制并重命名；差异点：
 //   - 仅作用于 ProviderConsole 的流式请求
 //   - withhold 后直接 Enabled=false 真停用账号（无冷却、无二次机会），由管理员手动恢复
-//   - 固定 maxAttempts=5（总共 5 个账号）、holdTimeout=30s、恒 fail_closed
+//   - 固定 maxAttempts=5（总共 5 个账号）、holdTimeout=30s、noDataTimeout=60s、恒 fail_closed
 //     （5 个账号全部 withhold 时返回 503 quality_degraded，绝不放行降智响应体）
 //   - 与 qualityGuard/requestRetry 完全独立，不读取、不修改其任何状态
 
@@ -30,14 +30,25 @@ const (
 	ConsoleGuardErrorCode           = "console_guard_degraded"
 	consoleGuardMaxAttempts         = 5
 	consoleGuardHoldTimeout         = 30 * time.Second
+	consoleGuardNoDataTimeout       = 60 * time.Second
 	lastErrorConsoleGuardDisabled   = "console_guard_degraded_disabled"
 	lastErrorConsoleNoProxyDisabled = "console_guard_no_proxy_disabled"
 	consoleGuardNoProxyErrorCode    = "console_guard_no_proxy"
 )
 
-var errConsoleGuardEmptyStream = errors.New("上游流式响应为空")
+var (
+	errConsoleGuardEmptyStream   = errors.New("上游流式响应为空")
+	errConsoleGuardNoDataTimeout = errors.New("上游 60 秒未返回任何数据")
+)
 
 const consoleGuardUpstreamClientClosedStatus = 499
+
+func isConsoleGuardNoDataTimeout(ctx context.Context, err error) bool {
+	if errors.Is(err, errConsoleGuardNoDataTimeout) {
+		return true
+	}
+	return ctx != nil && errors.Is(context.Cause(ctx), errConsoleGuardNoDataTimeout)
+}
 
 // ConsoleGuardRuntime 是 console guard 的运行时配置。Zero Enabled 关闭防护。
 type ConsoleGuardRuntime struct {
