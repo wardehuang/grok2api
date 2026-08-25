@@ -9,7 +9,7 @@ import (
 	"sync"
 )
 
-const DefaultPath = "/home/ubuntu/grok2api/data/console-degraded-egress-nodes.txt"
+const DefaultPath = "/app/data/console-degraded-egress-nodes.txt"
 
 var fileMu sync.Mutex
 
@@ -38,16 +38,16 @@ func AppendUnique(path, value string) error {
 	}
 
 	if directory := filepath.Dir(path); directory != "." {
-		if err := os.MkdirAll(directory, 0o755); err != nil {
+		if err := os.MkdirAll(directory, 0o750); err != nil {
 			return err
 		}
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	if err := file.Chmod(0o644); err != nil {
+	if err := file.Chmod(0o600); err != nil {
 		return err
 	}
 	if len(content) > 0 && content[len(content)-1] != '\n' {
@@ -57,6 +57,29 @@ func AppendUnique(path, value string) error {
 	}
 	_, err = io.WriteString(file, value+"\n")
 	return err
+}
+
+// Clear truncates the shared file while keeping the file itself available.
+func Clear(path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return errors.New("代理节点文件路径为空")
+	}
+
+	fileMu.Lock()
+	defer fileMu.Unlock()
+
+	if directory := filepath.Dir(path); directory != "." {
+		if err := os.MkdirAll(directory, 0o750); err != nil {
+			return err
+		}
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return file.Chmod(0o600)
 }
 
 // Read returns the current file content. A missing file is an empty file.

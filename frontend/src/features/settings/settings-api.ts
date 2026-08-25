@@ -125,6 +125,7 @@ export type SettingsSnapshotDTO = {
 };
 
 export type ConsoleGuardProxyFilePreviewDTO = { path: string; content: string };
+export type ConsoleGuardProxyFileClearDTO = { path: string; cleared: boolean };
 
 const settingsConfigValidator = hasShape({
   server: hasShape({ maxConcurrentRequests: isNumber }),
@@ -185,7 +186,7 @@ const defaultConsoleGuardConfig = (): SettingsConfigDTO["consoleGuard"] => ({
   generationWindowThresholdMS: 1250,
   minOutputReasoningTokens: 300,
   recordNonDegradedEvents: true,
-  degradedEgressNodeFilePath: "/home/ubuntu/grok2api/data/console-degraded-egress-nodes.txt",
+  degradedEgressNodeFilePath: "/app/data/console-degraded-egress-nodes.txt",
 });
 function withSettingsDefaults(snapshot: SettingsSnapshotDTO): SettingsSnapshotDTO {
   const accounts = snapshot.config.accounts ?? defaultAccountsConfig();
@@ -235,7 +236,7 @@ function withSettingsDefaults(snapshot: SettingsSnapshotDTO): SettingsSnapshotDT
         generationWindowThresholdMS: consoleGuard.generationWindowThresholdMS ?? 1250,
         minOutputReasoningTokens: consoleGuard.minOutputReasoningTokens ?? 300,
         recordNonDegradedEvents: consoleGuard.recordNonDegradedEvents ?? true,
-        degradedEgressNodeFilePath: consoleGuard.degradedEgressNodeFilePath ?? "/home/ubuntu/grok2api/data/console-degraded-egress-nodes.txt",
+        degradedEgressNodeFilePath: consoleGuard.degradedEgressNodeFilePath ?? "/app/data/console-degraded-egress-nodes.txt",
       },
     },
   };
@@ -383,6 +384,10 @@ export function updateSettings(revision: string, config: SettingsConfigDTO): Pro
 
 export function getConsoleGuardProxyFilePreview(): Promise<ConsoleGuardProxyFilePreviewDTO> {
   return apiRequest("/api/admin/v1/settings/console-guard/degraded-egress-nodes", {}, createObjectDecoder<ConsoleGuardProxyFilePreviewDTO>("console guard proxy file preview", { path: isString, content: isString }));
+}
+
+export function clearConsoleGuardProxyFile(): Promise<ConsoleGuardProxyFileClearDTO> {
+  return apiRequest("/api/admin/v1/settings/console-guard/degraded-egress-nodes/clear", { method: "POST" }, createObjectDecoder<ConsoleGuardProxyFileClearDTO>("console guard proxy file clear", { path: isString, cleared: isBoolean }));
 }
 
 type ListEgressNodesInput = {

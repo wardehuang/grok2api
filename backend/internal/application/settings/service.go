@@ -239,6 +239,16 @@ func (s *Service) ConsoleGuardProxyFilePreview() (ConsoleGuardProxyFilePreview, 
 	return ConsoleGuardProxyFilePreview{Path: path, Content: content}, nil
 }
 
+func (s *Service) ClearConsoleGuardProxyFile() (string, error) {
+	s.mu.RLock()
+	path := s.cfg.ConsoleGuard.DegradedEgressNodeFilePath
+	s.mu.RUnlock()
+	if err := consoleguardfile.Clear(path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
 // LoadPersisted 将数据库运行设置覆盖到代码默认配置，并执行完整边界校验。
 func LoadPersisted(ctx context.Context, base config.Config, repository repository.RuntimeSettingsRepository) (config.Config, time.Time, uint64, error) {
 	value, updatedAt, revision, found, err := repository.Get(ctx)

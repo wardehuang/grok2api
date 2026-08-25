@@ -14,7 +14,6 @@ services:
     volumes:
       - "${GROK2API_CONFIG:-./config.yaml}:/run/grok2api/config.yaml:ro"
       - grok2api-data:/app/data
-      - "${GROK2API_CONSOLE_GUARD_PROXY_DIR:-./data}:/home/ubuntu/grok2api/data"
       - quality_guard_state:/var/lib/grok2api-quality-guard
     restart: unless-stopped
     init: true

@@ -19,6 +19,7 @@ func (h *Handler) Register(router *gin.RouterGroup) {
 	router.GET("/settings", h.get)
 	router.PUT("/settings", h.update)
 	router.GET("/settings/console-guard/degraded-egress-nodes", h.previewConsoleGuardProxyFile)
+	router.POST("/settings/console-guard/degraded-egress-nodes/clear", h.clearConsoleGuardProxyFile)
 }
 
 type settingsConfigDTO struct {
@@ -156,6 +157,11 @@ type consoleGuardProxyFilePreviewResponse struct {
 	Content string `json:"content"`
 }
 
+type consoleGuardProxyFileClearResponse struct {
+	Path    string `json:"path"`
+	Cleared bool   `json:"cleared"`
+}
+
 type settingsResponse struct {
 	Config                   settingsConfigDTO              `json:"config"`
 	RecommendedProviderBuild providerBuildRecommendationDTO `json:"recommendedProviderBuild"`
@@ -208,6 +214,16 @@ func (h *Handler) previewConsoleGuardProxyFile(c *gin.Context) {
 		return
 	}
 	response.Success(c, http.StatusOK, consoleGuardProxyFilePreviewResponse{Path: preview.Path, Content: preview.Content})
+}
+
+func (h *Handler) clearConsoleGuardProxyFile(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	path, err := h.service.ClearConsoleGuardProxyFile()
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "consoleGuardProxyFileClearFailed", "清空 Console 降智代理节点文件失败")
+		return
+	}
+	response.Success(c, http.StatusOK, consoleGuardProxyFileClearResponse{Path: path, Cleared: true})
 }
 
 func (value settingsConfigDTO) toApplication() settingsapp.EditableConfig {
