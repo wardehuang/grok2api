@@ -22,14 +22,17 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/audit"
 	inferencedomain "github.com/chenyme/grok2api/backend/internal/domain/inference"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
+	"github.com/chenyme/grok2api/backend/internal/pkg/consoleguardfile"
 	neterrorpkg "github.com/chenyme/grok2api/backend/internal/pkg/neterror"
 )
 
 const (
-	ConsoleGuardErrorCode         = "console_guard_degraded"
-	consoleGuardMaxAttempts       = 5
-	consoleGuardHoldTimeout       = 30 * time.Second
-	lastErrorConsoleGuardDisabled = "console_guard_degraded_disabled"
+	ConsoleGuardErrorCode           = "console_guard_degraded"
+	consoleGuardMaxAttempts         = 5
+	consoleGuardHoldTimeout         = 30 * time.Second
+	lastErrorConsoleGuardDisabled   = "console_guard_degraded_disabled"
+	lastErrorConsoleNoProxyDisabled = "console_guard_no_proxy_disabled"
+	consoleGuardNoProxyErrorCode    = "console_guard_no_proxy"
 )
 
 var errConsoleGuardEmptyStream = errors.New("上游流式响应为空")
@@ -45,6 +48,11 @@ type ConsoleGuardRuntime struct {
 	MinOutputReasoningTokens    int64
 	RecordNonDegradedEvents     bool
 	RecordNonDegradedEventsSet  bool
+	DegradedEgressNodeFilePath  string
+}
+
+type consoleGuardProxyURLResolver interface {
+	ProxyURL(context.Context, uint64) (string, error)
 }
 
 // ConsoleGuardSignals 是扣流判定输入。
@@ -109,12 +117,19 @@ func normalizeConsoleGuard(cfg ConsoleGuardRuntime) ConsoleGuardRuntime {
 	if !cfg.RecordNonDegradedEventsSet {
 		cfg.RecordNonDegradedEvents = true
 	}
+	if strings.TrimSpace(cfg.DegradedEgressNodeFilePath) == "" {
+		cfg.DegradedEgressNodeFilePath = consoleguardfile.DefaultPath
+	}
 	return cfg
 }
 
 func (s *Service) UpdateConsoleGuard(cfg ConsoleGuardRuntime) {
 	normalized := normalizeConsoleGuard(cfg)
 	s.consoleGuard.Store(&normalized)
+}
+
+func (s *Service) SetConsoleGuardProxyURLResolver(resolver consoleGuardProxyURLResolver) {
+	s.consoleGuardProxyURLResolver = resolver
 }
 
 func (s *Service) consoleGuardConfig() ConsoleGuardRuntime {
@@ -315,11 +330,29 @@ func consoleGuardJSONStringEquals(raw json.RawMessage, want string) bool {
 func (s *Service) disableConsoleGuardAccount(ctx context.Context, requestID string, credential accountdomain.Credential) {
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalizationTimeout)
 	defer cancel()
+	if s.consoleGuardProxyURLResolver != nil {
+		proxyURL, err := s.consoleGuardProxyURLResolver.ProxyURL(writeCtx, credential.EgressNodeID)
+		if err != nil {
+			s.logger.Warn("console_guard_proxy_file_resolve_failed", "request_id", requestID, "account_id", credential.ID, "egress_node_id", credential.EgressNodeID, "error", err)
+		} else if err := consoleguardfile.AppendUnique(s.consoleGuardConfig().DegradedEgressNodeFilePath, proxyURL); err != nil {
+			s.logger.Error("console_guard_proxy_file_write_failed", "request_id", requestID, "account_id", credential.ID, "egress_node_id", credential.EgressNodeID, "error", err)
+		}
+	}
 	if err := s.selector.disableConsoleGuardAccount(writeCtx, credential); err != nil {
 		s.logger.Error("console_guard_disable_failed", "request_id", requestID, "account_id", credential.ID, "error", err)
 		return
 	}
 	s.logger.Info("console_guard_disabled", "request_id", requestID, "account_id", credential.ID, "account_name", credential.Name)
+}
+
+func (s *Service) disableConsoleNoProxyAccount(ctx context.Context, requestID string, credential accountdomain.Credential) {
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalizationTimeout)
+	defer cancel()
+	if err := s.selector.disableConsoleAccount(writeCtx, credential, lastErrorConsoleNoProxyDisabled); err != nil {
+		s.logger.Error("console_no_proxy_disable_failed", "request_id", requestID, "account_id", credential.ID, "error", err)
+		return
+	}
+	s.logger.Warn("console_no_proxy_disabled", "request_id", requestID, "account_id", credential.ID, "account_name", credential.Name)
 }
 
 func consoleGuardEffectiveOutputTokens(signals ConsoleGuardSignals) int64 {

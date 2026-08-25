@@ -946,11 +946,15 @@ func isMissingThinkingStrike(lastError string) bool {
 // 与 missing-thinking 的"冷却→再犯→停用"两段式不同，这里没有冷却概念，
 // 恢复只能由管理员手动启用。
 func (s *Selector) disableConsoleGuardAccount(ctx context.Context, credential account.Credential) error {
+	return s.disableConsoleAccount(ctx, credential, lastErrorConsoleGuardDisabled)
+}
+
+func (s *Selector) disableConsoleAccount(ctx context.Context, credential account.Credential, lastError string) error {
 	disabled := false
 	if _, err := s.accounts.UpdateMany(ctx, credential.Provider, []uint64{credential.ID}, repository.AccountUpdates{Enabled: &disabled}); err != nil {
 		return err
 	}
-	healthErr := s.accounts.UpdateHealth(ctx, credential.ID, credential.Provider, credential.FailureCount, nil, lastErrorConsoleGuardDisabled, false)
+	healthErr := s.accounts.UpdateHealth(ctx, credential.ID, credential.Provider, credential.FailureCount, nil, lastError, false)
 	s.ApplyInvalidation(repository.InvalidationEvent{
 		Kind: repository.InvalidationAccountStateChanged, Provider: credential.Provider, AccountID: credential.ID,
 	})

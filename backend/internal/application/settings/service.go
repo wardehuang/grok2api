@@ -10,6 +10,7 @@ import (
 
 	settingsdomain "github.com/chenyme/grok2api/backend/internal/domain/settings"
 	"github.com/chenyme/grok2api/backend/internal/infra/config"
+	"github.com/chenyme/grok2api/backend/internal/pkg/consoleguardfile"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 )
 
@@ -160,6 +161,7 @@ type ConsoleGuardConfig struct {
 	GenerationWindowThresholdMS         int64
 	MinOutputReasoningTokens            int64
 	RecordNonDegradedEvents             bool
+	DegradedEgressNodeFilePath          string
 	EnabledProvided                     bool
 	SoftTPSProvided                     bool
 	HardTPSProvided                     bool
@@ -167,6 +169,7 @@ type ConsoleGuardConfig struct {
 	GenerationWindowThresholdMSProvided bool
 	MinOutputReasoningTokensProvided    bool
 	RecordNonDegradedEventsProvided     bool
+	DegradedEgressNodeFilePathProvided  bool
 }
 
 // EditableConfig 聚合管理端允许修改的运行参数。
@@ -198,6 +201,12 @@ type Snapshot struct {
 	RestartRequired          []string
 }
 
+// ConsoleGuardProxyFilePreview 是 Console 降智代理节点共享文件的管理端预览。
+type ConsoleGuardProxyFilePreview struct {
+	Path    string
+	Content string
+}
+
 // Service 管理允许在线修改的配置，并向后台任务广播配置变更。
 type Service struct {
 	mu                     sync.RWMutex
@@ -217,6 +226,17 @@ func NewService(cfg config.Config, updatedAt time.Time, revision uint64, reposit
 		updatedAt = time.Now().UTC()
 	}
 	return &Service{cfg: cfg, updatedAt: updatedAt, revision: revision, activeBufferSize: cfg.Audit.BufferSize, activeMediaConcurrency: cfg.Provider.Web.MediaConcurrency, repository: repository, notify: notify, apply: apply}
+}
+
+func (s *Service) ConsoleGuardProxyFilePreview() (ConsoleGuardProxyFilePreview, error) {
+	s.mu.RLock()
+	path := s.cfg.ConsoleGuard.DegradedEgressNodeFilePath
+	s.mu.RUnlock()
+	content, err := consoleguardfile.Read(path)
+	if err != nil {
+		return ConsoleGuardProxyFilePreview{}, err
+	}
+	return ConsoleGuardProxyFilePreview{Path: path, Content: content}, nil
 }
 
 // LoadPersisted 将数据库运行设置覆盖到代码默认配置，并执行完整边界校验。
@@ -474,6 +494,9 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 	if value.ConsoleGuard.RecordNonDegradedEvents != nil {
 		base.ConsoleGuard.RecordNonDegradedEvents = *value.ConsoleGuard.RecordNonDegradedEvents
 	}
+	if path := strings.TrimSpace(value.ConsoleGuard.DegradedEgressNodeFilePath); path != "" {
+		base.ConsoleGuard.DegradedEgressNodeFilePath = path
+	}
 	return base
 }
 
@@ -546,7 +569,7 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 			AutoCleanReauthMinAge:                value.Accounts.AutoCleanReauthMinAge.Value(),
 			AutoCleanIncludeDisabled:             value.Accounts.AutoCleanIncludeDisabled,
 		},
-		ConsoleGuard: settingsdomain.ConsoleGuardConfig{Enabled: value.ConsoleGuard.Enabled, SoftTPS: value.ConsoleGuard.SoftTPS, HardTPS: value.ConsoleGuard.HardTPS, FirstTokenThresholdMS: value.ConsoleGuard.FirstTokenThresholdMS, GenerationWindowThresholdMS: value.ConsoleGuard.GenerationWindowThresholdMS, MinOutputReasoningTokens: value.ConsoleGuard.MinOutputReasoningTokens, RecordNonDegradedEvents: &recordNonDegradedEvents},
+		ConsoleGuard: settingsdomain.ConsoleGuardConfig{Enabled: value.ConsoleGuard.Enabled, SoftTPS: value.ConsoleGuard.SoftTPS, HardTPS: value.ConsoleGuard.HardTPS, FirstTokenThresholdMS: value.ConsoleGuard.FirstTokenThresholdMS, GenerationWindowThresholdMS: value.ConsoleGuard.GenerationWindowThresholdMS, MinOutputReasoningTokens: value.ConsoleGuard.MinOutputReasoningTokens, RecordNonDegradedEvents: &recordNonDegradedEvents, DegradedEgressNodeFilePath: value.ConsoleGuard.DegradedEgressNodeFilePath},
 	}
 }
 
@@ -665,6 +688,9 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 		}
 		if input.ConsoleGuard.RecordNonDegradedEventsProvided {
 			next.ConsoleGuard.RecordNonDegradedEvents = input.ConsoleGuard.RecordNonDegradedEvents
+		}
+		if input.ConsoleGuard.DegradedEgressNodeFilePathProvided {
+			next.ConsoleGuard.DegradedEgressNodeFilePath = strings.TrimSpace(input.ConsoleGuard.DegradedEgressNodeFilePath)
 		}
 	}
 
@@ -805,7 +831,7 @@ func toEditable(cfg config.Config) EditableConfig {
 			AutoCleanReauthMinAge:                        cfg.Accounts.AutoCleanReauthMinAge.String(),
 			AutoCleanIncludeDisabled:                     cfg.Accounts.AutoCleanIncludeDisabled,
 		},
-		ConsoleGuard:         ConsoleGuardConfig{Enabled: cfg.ConsoleGuard.Enabled, SoftTPS: cfg.ConsoleGuard.SoftTPS, HardTPS: cfg.ConsoleGuard.HardTPS, FirstTokenThresholdMS: cfg.ConsoleGuard.FirstTokenThresholdMS, GenerationWindowThresholdMS: cfg.ConsoleGuard.GenerationWindowThresholdMS, MinOutputReasoningTokens: cfg.ConsoleGuard.MinOutputReasoningTokens, EnabledProvided: true, SoftTPSProvided: true, HardTPSProvided: true, FirstTokenThresholdMSProvided: true, GenerationWindowThresholdMSProvided: true, MinOutputReasoningTokensProvided: true},
+		ConsoleGuard:         ConsoleGuardConfig{Enabled: cfg.ConsoleGuard.Enabled, SoftTPS: cfg.ConsoleGuard.SoftTPS, HardTPS: cfg.ConsoleGuard.HardTPS, FirstTokenThresholdMS: cfg.ConsoleGuard.FirstTokenThresholdMS, GenerationWindowThresholdMS: cfg.ConsoleGuard.GenerationWindowThresholdMS, MinOutputReasoningTokens: cfg.ConsoleGuard.MinOutputReasoningTokens, DegradedEgressNodeFilePath: cfg.ConsoleGuard.DegradedEgressNodeFilePath, EnabledProvided: true, SoftTPSProvided: true, HardTPSProvided: true, FirstTokenThresholdMSProvided: true, GenerationWindowThresholdMSProvided: true, MinOutputReasoningTokensProvided: true, DegradedEgressNodeFilePathProvided: true},
 		ConsoleGuardProvided: true,
 		AccountsProvided:     true,
 	}

@@ -18,6 +18,7 @@ func NewHandler(service *settingsapp.Service) *Handler { return &Handler{service
 func (h *Handler) Register(router *gin.RouterGroup) {
 	router.GET("/settings", h.get)
 	router.PUT("/settings", h.update)
+	router.GET("/settings/console-guard/degraded-egress-nodes", h.previewConsoleGuardProxyFile)
 }
 
 type settingsConfigDTO struct {
@@ -147,6 +148,12 @@ type consoleGuardConfigDTO struct {
 	GenerationWindowThresholdMS *int64   `json:"generationWindowThresholdMS,omitempty"`
 	MinOutputReasoningTokens    *int64   `json:"minOutputReasoningTokens,omitempty"`
 	RecordNonDegradedEvents     *bool    `json:"recordNonDegradedEvents,omitempty"`
+	DegradedEgressNodeFilePath  *string  `json:"degradedEgressNodeFilePath,omitempty"`
+}
+
+type consoleGuardProxyFilePreviewResponse struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
 }
 
 type settingsResponse struct {
@@ -191,6 +198,16 @@ func (h *Handler) update(c *gin.Context) {
 		return
 	}
 	response.Success(c, http.StatusOK, newSettingsResponse(result))
+}
+
+func (h *Handler) previewConsoleGuardProxyFile(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	preview, err := h.service.ConsoleGuardProxyFilePreview()
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "consoleGuardProxyFileReadFailed", "读取 Console 降智代理节点文件失败")
+		return
+	}
+	response.Success(c, http.StatusOK, consoleGuardProxyFilePreviewResponse{Path: preview.Path, Content: preview.Content})
 }
 
 func (value settingsConfigDTO) toApplication() settingsapp.EditableConfig {
@@ -290,8 +307,10 @@ func (value settingsConfigDTO) toApplication() settingsapp.EditableConfig {
 			MinOutputReasoningTokensProvided:    value.ConsoleGuard.MinOutputReasoningTokens != nil,
 			RecordNonDegradedEvents:             boolValue(value.ConsoleGuard.RecordNonDegradedEvents),
 			RecordNonDegradedEventsProvided:     value.ConsoleGuard.RecordNonDegradedEvents != nil,
+			DegradedEgressNodeFilePath:          optionalString(value.ConsoleGuard.DegradedEgressNodeFilePath),
+			DegradedEgressNodeFilePathProvided:  value.ConsoleGuard.DegradedEgressNodeFilePath != nil,
 		}
-		result.ConsoleGuardProvided = result.ConsoleGuard.EnabledProvided || result.ConsoleGuard.SoftTPSProvided || result.ConsoleGuard.HardTPSProvided || result.ConsoleGuard.FirstTokenThresholdMSProvided || result.ConsoleGuard.GenerationWindowThresholdMSProvided || result.ConsoleGuard.MinOutputReasoningTokensProvided || result.ConsoleGuard.RecordNonDegradedEventsProvided
+		result.ConsoleGuardProvided = result.ConsoleGuard.EnabledProvided || result.ConsoleGuard.SoftTPSProvided || result.ConsoleGuard.HardTPSProvided || result.ConsoleGuard.FirstTokenThresholdMSProvided || result.ConsoleGuard.GenerationWindowThresholdMSProvided || result.ConsoleGuard.MinOutputReasoningTokensProvided || result.ConsoleGuard.RecordNonDegradedEventsProvided || result.ConsoleGuard.DegradedEgressNodeFilePathProvided
 	}
 	return result
 }
@@ -364,7 +383,7 @@ func newSettingsResponse(value settingsapp.Snapshot) settingsResponse {
 				AutoCleanReauthMinAge:                config.Accounts.AutoCleanReauthMinAge,
 				AutoCleanIncludeDisabled:             config.Accounts.AutoCleanIncludeDisabled,
 			},
-			ConsoleGuard: &consoleGuardConfigDTO{Enabled: boolPointer(config.ConsoleGuard.Enabled), SoftTPS: floatPointer(config.ConsoleGuard.SoftTPS), HardTPS: floatPointer(config.ConsoleGuard.HardTPS), FirstTokenThresholdMS: int64Pointer(config.ConsoleGuard.FirstTokenThresholdMS), GenerationWindowThresholdMS: int64Pointer(config.ConsoleGuard.GenerationWindowThresholdMS), MinOutputReasoningTokens: int64Pointer(config.ConsoleGuard.MinOutputReasoningTokens), RecordNonDegradedEvents: boolPointer(config.ConsoleGuard.RecordNonDegradedEvents)},
+			ConsoleGuard: &consoleGuardConfigDTO{Enabled: boolPointer(config.ConsoleGuard.Enabled), SoftTPS: floatPointer(config.ConsoleGuard.SoftTPS), HardTPS: floatPointer(config.ConsoleGuard.HardTPS), FirstTokenThresholdMS: int64Pointer(config.ConsoleGuard.FirstTokenThresholdMS), GenerationWindowThresholdMS: int64Pointer(config.ConsoleGuard.GenerationWindowThresholdMS), MinOutputReasoningTokens: int64Pointer(config.ConsoleGuard.MinOutputReasoningTokens), RecordNonDegradedEvents: boolPointer(config.ConsoleGuard.RecordNonDegradedEvents), DegradedEgressNodeFilePath: stringPointer(config.ConsoleGuard.DegradedEgressNodeFilePath)},
 		},
 		RecommendedProviderBuild: providerBuildRecommendationDTO{
 			ClientVersion: value.RecommendedProviderBuild.ClientVersion,

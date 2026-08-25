@@ -1455,12 +1455,14 @@ export function AccountsPage() {
           <Table viewportRows={20} rowHeight={56} className="table-fixed border-collapse min-w-[780px] xl:min-w-[960px] 2xl:min-w-[1080px]">
             <colgroup>
               <col style={{ width: "3%" }} />
-              <col style={{ width: "18%" }} />
+              <col style={{ width: "16%" }} />
               <col style={{ width: "7%" }} />
               <col style={{ width: "7%" }} />
-              <col style={{ width: provider === "grok_build" ? "27%" : "43%" }} />
+              <col style={{ width: "11%" }} />
+              <col style={{ width: provider === "grok_build" ? "12%" : "29%" }} />
+              <col style={{ width: "7%" }} />
               {provider === "grok_build" ? <col style={{ width: "16%" }} /> : null}
-              <col style={{ width: "18%" }} />
+              <col style={{ width: provider === "grok_build" ? "17%" : "16%" }} />
               <col style={{ width: "4%" }} />
             </colgroup>
             <TableHeader>
@@ -1469,6 +1471,8 @@ export function AccountsPage() {
                 <SortableTableHead field="name" sortBy={sort.field} sortOrder={sort.order} onSort={changeSort}>{t("accounts.account")}</SortableTableHead>
                 <SortableTableHead field="type" sortBy={sort.field} sortOrder={sort.order} align="center" onSort={changeSort} className="whitespace-nowrap">{t("accountType.label")}</SortableTableHead>
                 <SortableTableHead field="status" sortBy={sort.field} sortOrder={sort.order} align="center" onSort={changeSort} className="whitespace-nowrap">{t("accounts.status")}</SortableTableHead>
+                <TableHead className="whitespace-nowrap text-center">{t("accounts.egressIP")}</TableHead>
+                <SortableTableHead field="priority" sortBy={sort.field} sortOrder={sort.order} initialOrder="desc" align="center" onSort={changeSort} className="whitespace-nowrap">{t("accounts.scheduling")}</SortableTableHead>
                 <TableHead className={cn("whitespace-nowrap", provider !== "grok_build" && "px-6")}>{t("accounts.quota")}</TableHead>
                 {provider === "grok_build" ? <TableHead className="whitespace-nowrap pl-4">{t("accountCredential.label")}</TableHead> : null}
                 <SortableTableHead field="createdAt" sortBy={sort.field} sortOrder={sort.order} initialOrder="desc" onSort={changeSort} className="whitespace-nowrap">{t("accounts.createdAt")}</SortableTableHead>
@@ -1476,11 +1480,11 @@ export function AccountsPage() {
               </TableRow>
             </TableHeader>
             {accountsQuery.isPending ? (
-              <TableBody><TableLoadingRow colSpan={provider === "grok_build" ? 8 : 7} /></TableBody>
+              <TableBody><TableLoadingRow colSpan={provider === "grok_build" ? 10 : 9} /></TableBody>
             ) : (
               <VirtualTableBody
                 items={result?.items ?? []}
-                colSpan={provider === "grok_build" ? 8 : 7}
+                colSpan={provider === "grok_build" ? 10 : 9}
                 rowHeight={56}
                 renderRow={(account) => (
 	                  <TableRow className="group h-14 [&>td]:py-1.5" key={account.id} data-state={selected.has(account.id) ? "selected" : undefined}>
@@ -1488,6 +1492,8 @@ export function AccountsPage() {
 	                    <TableCell className="min-w-0"><AccountNameCell account={account} /></TableCell>
                     <TableCell className="text-center whitespace-nowrap">{provider === "grok_web" ? <WebAccountType tier={account.webTier} /> : provider === "grok_console" ? <AccountTypeText label={t("accountType.console")} variant="free" /> : <AccountType quota={account.quota} />}</TableCell>
                     <TableCell className="text-center whitespace-nowrap"><AccountStatus account={account} /></TableCell>
+                    <TableCell className="whitespace-nowrap text-center font-mono text-xs">{account.egressNodeId ? account.egressExitIp || "—" : t("accounts.noEgress")}</TableCell>
+                    <TableCell className="text-center whitespace-nowrap text-sm tabular-nums">{account.priority}</TableCell>
                     <TableCell className={provider === "grok_build" ? undefined : "px-6"}>{provider === "grok_web" ? <WebQuota windows={account.quotaWindows ?? []} locale={i18n.language} tier={account.webTier} /> : provider === "grok_console" ? <ConsoleQuota windows={account.quotaWindows ?? []} locale={i18n.language} /> : <AccountQuota quota={account.quota} billing={account.billing} locale={i18n.language} />}</TableCell>
                     {provider === "grok_build" ? <TableCell className="whitespace-nowrap pl-4 text-xs">
                       {account.refreshable ? (

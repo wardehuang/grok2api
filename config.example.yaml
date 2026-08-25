@@ -180,3 +180,5 @@ consoleGuard:
   minOutputReasoningTokens: 300
   # 默认记录未降智请求；关闭后仅保留实际命中降智的 Console 事件。
   recordNonDegradedEvents: true
+  # 命中降智后写入实际代理地址，一行一个；管理端可预览。
+  degradedEgressNodeFilePath: /home/ubuntu/grok2api/data/console-degraded-egress-nodes.txt

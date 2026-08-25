@@ -545,7 +545,7 @@ func (s *Service) List(ctx context.Context, page, pageSize int, search string, f
 		!oneOf(filter.Agreement, "", "nsfwEnabled", "nsfwDisabled", "termsAccepted", "termsNotAccepted", "allAccepted", "allNotAccepted") ||
 		(filter.Agreement != "" && filter.Provider != string(accountdomain.ProviderWeb)) ||
 		!validAssociationFilter(filter.Provider, filter.Association) ||
-		!repository.IsValidSort(filter.Sort, "name", "type", "status", "createdAt") {
+		!repository.IsValidSort(filter.Sort, "name", "type", "status", "priority", "createdAt") {
 		return nil, 0, ErrInvalidFilter
 	}
 	var refreshable *bool

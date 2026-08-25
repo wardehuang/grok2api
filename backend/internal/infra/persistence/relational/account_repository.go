@@ -11,8 +11,8 @@ import (
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/media"
-	emailmatch "github.com/chenyme/grok2api/backend/internal/transport/http/cpaautopproxy/emailmatch"
 	"github.com/chenyme/grok2api/backend/internal/repository"
+	emailmatch "github.com/chenyme/grok2api/backend/internal/transport/http/cpaautopproxy/emailmatch"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -139,9 +139,10 @@ func (r *AccountRepository) List(ctx context.Context, input repository.AccountLi
 		"name":      {expression: "LOWER(provider_accounts.name)"},
 		"type":      {expression: accountTypeSortExpression},
 		"status":    {expression: accountStatusSortExpression},
+		"priority":  {expression: "provider_accounts.priority", defaultDirection: repository.SortDescending, tieDirection: repository.SortAscending},
 		"createdAt": {expression: "provider_accounts.created_at", defaultDirection: repository.SortDescending},
 	}, sortSpec{expression: "provider_accounts.created_at", defaultDirection: repository.SortDescending}, "provider_accounts.id")
-	if err := query.Preload("Credential").Preload("WebProfile").Offset(input.Page.Offset).Limit(input.Page.Limit).Find(&rows).Error; err != nil {
+	if err := query.Preload("Credential").Preload("WebProfile").Preload("EgressNode").Offset(input.Page.Offset).Limit(input.Page.Limit).Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 	out := make([]account.Credential, 0, len(rows))
@@ -943,7 +944,7 @@ func (r *AccountRepository) HasActive(ctx context.Context, provider account.Prov
 
 func (r *AccountRepository) Get(ctx context.Context, id uint64) (account.Credential, error) {
 	var row accountModel
-	if err := r.db.db.WithContext(ctx).Preload("Credential").Preload("WebProfile").First(&row, id).Error; err != nil {
+	if err := r.db.db.WithContext(ctx).Preload("Credential").Preload("WebProfile").Preload("EgressNode").First(&row, id).Error; err != nil {
 		return account.Credential{}, mapError(err)
 	}
 	value := toAccountDomain(row)

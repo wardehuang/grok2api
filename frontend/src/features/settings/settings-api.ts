@@ -43,6 +43,7 @@ export type SettingsConfigDTO = {
     generationWindowThresholdMS: number;
     minOutputReasoningTokens: number;
     recordNonDegradedEvents: boolean;
+    degradedEgressNodeFilePath: string;
   };
 };
 
@@ -123,6 +124,8 @@ export type SettingsSnapshotDTO = {
   restartRequired: string[];
 };
 
+export type ConsoleGuardProxyFilePreviewDTO = { path: string; content: string };
+
 const settingsConfigValidator = hasShape({
   server: hasShape({ maxConcurrentRequests: isNumber }),
   providerBuild: hasShape({ baseURL: isString, fallbackBaseURL: isString, clientVersion: isString, clientIdentifier: isString, tokenAuth: isString, tokenAuthConfigured: isBoolean, userAgent: isString, responseHeaderTimeout: isString, streamIdleTimeout: isString }),
@@ -162,6 +165,7 @@ const settingsConfigValidator = hasShape({
     generationWindowThresholdMS: isOptional(isNumber),
     minOutputReasoningTokens: isOptional(isNumber),
     recordNonDegradedEvents: isOptional(isBoolean),
+    degradedEgressNodeFilePath: isOptional(isString),
   })),
 });
 const defaultAccountsConfig = (): SettingsConfigDTO["accounts"] => ({
@@ -181,6 +185,7 @@ const defaultConsoleGuardConfig = (): SettingsConfigDTO["consoleGuard"] => ({
   generationWindowThresholdMS: 1250,
   minOutputReasoningTokens: 300,
   recordNonDegradedEvents: true,
+  degradedEgressNodeFilePath: "/home/ubuntu/grok2api/data/console-degraded-egress-nodes.txt",
 });
 function withSettingsDefaults(snapshot: SettingsSnapshotDTO): SettingsSnapshotDTO {
   const accounts = snapshot.config.accounts ?? defaultAccountsConfig();
@@ -230,6 +235,7 @@ function withSettingsDefaults(snapshot: SettingsSnapshotDTO): SettingsSnapshotDT
         generationWindowThresholdMS: consoleGuard.generationWindowThresholdMS ?? 1250,
         minOutputReasoningTokens: consoleGuard.minOutputReasoningTokens ?? 300,
         recordNonDegradedEvents: consoleGuard.recordNonDegradedEvents ?? true,
+        degradedEgressNodeFilePath: consoleGuard.degradedEgressNodeFilePath ?? "/home/ubuntu/grok2api/data/console-degraded-egress-nodes.txt",
       },
     },
   };
@@ -373,6 +379,10 @@ export function getSettings(): Promise<SettingsSnapshotDTO> {
 
 export function updateSettings(revision: string, config: SettingsConfigDTO): Promise<SettingsSnapshotDTO> {
   return apiRequest("/api/admin/v1/settings", { method: "PUT", body: { revision, config } }, decodeSettingsSnapshot);
+}
+
+export function getConsoleGuardProxyFilePreview(): Promise<ConsoleGuardProxyFilePreviewDTO> {
+  return apiRequest("/api/admin/v1/settings/console-guard/degraded-egress-nodes", {}, createObjectDecoder<ConsoleGuardProxyFilePreviewDTO>("console guard proxy file preview", { path: isString, content: isString }));
 }
 
 type ListEgressNodesInput = {

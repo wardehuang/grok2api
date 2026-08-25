@@ -17,6 +17,7 @@ import (
 	auditdomain "github.com/chenyme/grok2api/backend/internal/domain/audit"
 	clientkeydomain "github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	settingsdomain "github.com/chenyme/grok2api/backend/internal/domain/settings"
+	"github.com/chenyme/grok2api/backend/internal/pkg/consoleguardfile"
 	"github.com/chenyme/grok2api/backend/internal/pkg/signerurl"
 	"gopkg.in/yaml.v3"
 )
@@ -311,6 +312,7 @@ type ConsoleGuardConfig struct {
 	GenerationWindowThresholdMS int64   `yaml:"generationWindowThresholdMS"`
 	MinOutputReasoningTokens    int64   `yaml:"minOutputReasoningTokens"`
 	RecordNonDegradedEvents     bool    `yaml:"recordNonDegradedEvents"`
+	DegradedEgressNodeFilePath  string  `yaml:"degradedEgressNodeFilePath"`
 }
 
 type ClientKeyDefaultsConfig struct {
@@ -808,6 +810,9 @@ func validateConsoleGuardConfig(value ConsoleGuardConfig) error {
 	if value.FirstTokenThresholdMS < 1 || value.GenerationWindowThresholdMS < 1 || value.MinOutputReasoningTokens < 1 {
 		return errors.New("consoleGuard 复合判定阈值必须大于 0")
 	}
+	if path := strings.TrimSpace(value.DegradedEgressNodeFilePath); path == "" || strings.ContainsRune(path, '\x00') || len(path) > 4096 {
+		return errors.New("consoleGuard.degradedEgressNodeFilePath 无效")
+	}
 	return nil
 }
 
@@ -972,7 +977,7 @@ func defaultConfig() Config {
 		ConsoleGuard: ConsoleGuardConfig{
 			SoftTPS: auditdomain.DefaultDegradeSoftTPS, HardTPS: auditdomain.DefaultDegradeHardTPS,
 			FirstTokenThresholdMS: 5000, GenerationWindowThresholdMS: 1250, MinOutputReasoningTokens: 300,
-			RecordNonDegradedEvents: true,
+			RecordNonDegradedEvents: true, DegradedEgressNodeFilePath: consoleguardfile.DefaultPath,
 		},
 		ClientKeyDefaults: ClientKeyDefaultsConfig{RPMLimit: clientkeydomain.DefaultRPMLimit, MaxConcurrent: clientkeydomain.DefaultMaxConcurrent},
 		Accounts: AccountsConfig{

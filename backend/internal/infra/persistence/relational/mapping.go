@@ -77,6 +77,10 @@ func toAccountDomain(value accountModel) account.Credential {
 	if account.Provider(value.Provider) != account.ProviderBuild || !buildRouteMode.IsValid() {
 		buildRouteMode = account.BuildRouteAuto
 	}
+	egressExitIP := ""
+	if value.EgressNode != nil {
+		egressExitIP = value.EgressNode.ExitIP
+	}
 	return account.Credential{
 		ID: value.ID, Provider: account.Provider(value.Provider), AuthType: authType, Name: value.Name, Email: value.Email,
 		UserID: value.UserID, TeamID: value.TeamID, SourceKey: value.SourceKey, OIDCClientID: clientID,
@@ -88,7 +92,7 @@ func toAccountDomain(value accountModel) account.Credential {
 		CooldownUntil: value.CooldownUntil, LastError: value.LastError, LastUsedAt: value.LastUsedAt,
 		ObservedModel: value.ObservedModel, ObservedModelAt: value.ObservedModelAt, WebTier: webTier, WebTierSyncedAt: webTierSyncedAt,
 		WebNSFWEnabledAt: webNSFWEnabledAt, WebTermsAcceptedAt: webTermsAcceptedAt, WebTermsAcceptedVersion: webTermsAcceptedVersion, WebBirthDateSetAt: webBirthDateSetAt, EgressIdentity: egressIdentity,
-		EgressNodeID: valueEgressNodeID(value.EgressNodeID), EgressAssignmentMode: account.EgressAssignmentMode(value.EgressAssignmentMode), EgressAssignedAt: value.EgressAssignedAt,
+		EgressNodeID: valueEgressNodeID(value.EgressNodeID), EgressAssignmentMode: account.EgressAssignmentMode(value.EgressAssignmentMode), EgressAssignedAt: value.EgressAssignedAt, EgressExitIP: egressExitIP,
 		BuildAPIFallback: value.BuildAPIFallback, BuildRouteMode: buildRouteMode,
 		BuildSuperEntitled: value.BuildSuperEntitled && account.Provider(value.Provider) == account.ProviderBuild,
 		BuildBotFlagSource: normalizedBuildBotFlagSource(account.Provider(value.Provider), value.Credential),

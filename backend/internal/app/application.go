@@ -353,6 +353,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	modelRepo.SetInvalidationObserver(invalidationService.Notify)
 	clientKeyRepo.SetInvalidationObserver(invalidationService.Notify)
 	gatewayService := gateway.NewService(modelService, auditService, accountService, clientKeyService, providers, selector, responseRepo, cfg.Routing.MaxAttempts)
+	gatewayService.SetConsoleGuardProxyURLResolver(egressService)
 	gatewayService.UpdateQualityRetry(qualityRetryRuntime(cfg.QualityGuard.RequestRetry))
 	gatewayService.UpdateConsoleGuard(consoleGuardRuntime(cfg.ConsoleGuard))
 	gatewayService.UpdateVideoMaxAttempts(cfg.Routing.VideoMaxAttempts)
@@ -508,7 +509,7 @@ func consoleGuardRuntime(value config.ConsoleGuardConfig) gateway.ConsoleGuardRu
 	return gateway.ConsoleGuardRuntime{
 		Enabled: value.Enabled, SoftTPS: value.SoftTPS, HardTPS: value.HardTPS,
 		FirstTokenThresholdMS: value.FirstTokenThresholdMS, GenerationWindowThresholdMS: value.GenerationWindowThresholdMS, MinOutputReasoningTokens: value.MinOutputReasoningTokens,
-		RecordNonDegradedEvents: value.RecordNonDegradedEvents, RecordNonDegradedEventsSet: true,
+		RecordNonDegradedEvents: value.RecordNonDegradedEvents, RecordNonDegradedEventsSet: true, DegradedEgressNodeFilePath: value.DegradedEgressNodeFilePath,
 	}
 }
 

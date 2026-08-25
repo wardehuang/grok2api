@@ -190,6 +190,7 @@ type Credential struct {
 	EgressNodeID         uint64
 	EgressAssignmentMode EgressAssignmentMode
 	EgressAssignedAt     *time.Time
+	EgressExitIP         string
 	// WebNSFWEnabledAt 记录 Grok Web 上游首次确认 NSFW 已成功开启的时间。
 	// 普通导入、额度同步和凭据更新不得清除。
 	WebNSFWEnabledAt *time.Time

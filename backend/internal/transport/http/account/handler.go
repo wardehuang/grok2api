@@ -322,6 +322,7 @@ type accountResponse struct {
 	BuildBotFlagSource         int                     `json:"buildBotFlagSource,omitempty"`
 	EgressNodeID               uint64                  `json:"egressNodeId,omitempty,string"`
 	EgressAssignmentMode       string                  `json:"egressAssignmentMode,omitempty"`
+	EgressExitIP               string                  `json:"egressExitIp,omitempty"`
 	ModelSyncFailed            bool                    `json:"modelSyncFailed,omitempty"`
 	Billing                    *billingResponse        `json:"billing,omitempty"`
 	Quota                      quotaResponse           `json:"quota"`
@@ -1499,6 +1500,7 @@ func newAccountResponse(value accountapp.View) accountResponse {
 		BuildBotFlagSource:         buildBotFlagSourceResponse(c.Provider, value.BuildBotFlagged, value.BuildBotFlagSource),
 		EgressNodeID:               c.EgressNodeID,
 		EgressAssignmentMode:       string(c.EgressAssignmentMode),
+		EgressExitIP:               c.EgressExitIP,
 		Quota:                      newQuotaResponse(value.Quota), QuotaWindows: make([]quotaWindowResponse, 0, len(value.QuotaWindows)),
 	}
 	for _, linked := range c.LinkedAccounts {

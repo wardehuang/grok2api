@@ -11,6 +11,7 @@ type sortSpec struct {
 	expression       string
 	nullsLast        bool
 	defaultDirection repository.SortDirection
+	tieDirection     repository.SortDirection
 }
 
 func applyStableSort(query *gorm.DB, sort repository.SortQuery, fields map[string]sortSpec, fallback sortSpec, idColumn string) *gorm.DB {
@@ -29,7 +30,15 @@ func applyStableSort(query *gorm.DB, sort repository.SortQuery, fields map[strin
 	if spec.nullsLast {
 		query = query.Order("CASE WHEN " + spec.expression + " IS NULL THEN 1 ELSE 0 END ASC")
 	}
-	return query.Order(spec.expression + " " + direction).Order(idColumn + " " + direction)
+	tieDirection := resolvedDirection
+	if spec.tieDirection == repository.SortAscending || spec.tieDirection == repository.SortDescending {
+		tieDirection = spec.tieDirection
+	}
+	tieSQLDirection := "ASC"
+	if tieDirection == repository.SortDescending {
+		tieSQLDirection = "DESC"
+	}
+	return query.Order(spec.expression + " " + direction).Order(idColumn + " " + tieSQLDirection)
 }
 
 func stableSortSpec(sort repository.SortQuery, fields map[string]sortSpec, fallback sortSpec) (sortSpec, string) {

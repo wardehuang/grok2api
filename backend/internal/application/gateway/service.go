@@ -186,36 +186,37 @@ type accountModelSyncer interface {
 
 // Service handles model routing, account selection, failover, and audit finalization.
 type Service struct {
-	models                      routeResolver
-	audits                      auditRecorder
-	accounts                    *accountapp.Service
-	clientKeys                  *clientkeyapp.Service
-	providers                   *provider.Registry
-	selector                    *Selector
-	responses                   repository.ResponseRepository
-	maxAttempts                 atomic.Int64
-	videoMaxAttempts            atomic.Int64
-	buildForbiddenReauth        atomic.Pointer[buildForbiddenReauthPolicy]
-	requestTimeout              atomic.Int64
-	mediaJobs                   repository.MediaJobRepository
-	mediaAssets                 videoAssetStore
-	mediaQueue                  chan string
-	mediaMu                     sync.Mutex
-	mediaQueued                 map[string]struct{}
-	mediaWorker                 int
-	mediaInputSlots             chan struct{}
-	mediaQueueFull              atomic.Uint64
-	logger                      *slog.Logger
-	rateLimitMu                 sync.Mutex
-	rateLimitActive             atomic.Bool
-	rateLimitNextExpiry         atomic.Int64
-	rateLimits                  map[string]teamModelRateLimit
-	rateLimitTeams              map[uint64]teamRateLimitObservation
-	modelSyncMu                 sync.Mutex
-	modelSyncing                map[uint64]struct{}
-	markBuildChatDeniedAsReauth atomic.Bool
-	qualityRetry                atomic.Pointer[QualityRetryRuntime]
-	consoleGuard                atomic.Pointer[ConsoleGuardRuntime]
+	models                       routeResolver
+	audits                       auditRecorder
+	accounts                     *accountapp.Service
+	clientKeys                   *clientkeyapp.Service
+	providers                    *provider.Registry
+	selector                     *Selector
+	responses                    repository.ResponseRepository
+	maxAttempts                  atomic.Int64
+	videoMaxAttempts             atomic.Int64
+	buildForbiddenReauth         atomic.Pointer[buildForbiddenReauthPolicy]
+	requestTimeout               atomic.Int64
+	mediaJobs                    repository.MediaJobRepository
+	mediaAssets                  videoAssetStore
+	mediaQueue                   chan string
+	mediaMu                      sync.Mutex
+	mediaQueued                  map[string]struct{}
+	mediaWorker                  int
+	mediaInputSlots              chan struct{}
+	mediaQueueFull               atomic.Uint64
+	logger                       *slog.Logger
+	rateLimitMu                  sync.Mutex
+	rateLimitActive              atomic.Bool
+	rateLimitNextExpiry          atomic.Int64
+	rateLimits                   map[string]teamModelRateLimit
+	rateLimitTeams               map[uint64]teamRateLimitObservation
+	modelSyncMu                  sync.Mutex
+	modelSyncing                 map[uint64]struct{}
+	markBuildChatDeniedAsReauth  atomic.Bool
+	qualityRetry                 atomic.Pointer[QualityRetryRuntime]
+	consoleGuard                 atomic.Pointer[ConsoleGuardRuntime]
+	consoleGuardProxyURLResolver consoleGuardProxyURLResolver
 }
 
 type teamModelRateLimit struct {
@@ -1243,6 +1244,22 @@ attemptLoop:
 			break
 		}
 		excluded[lease.Credential.ID] = true
+		if route.Provider == accountdomain.ProviderConsole && lease.Credential.EgressNodeID == 0 {
+			credential := lease.Credential
+			if consoleGuardEnabled {
+				consoleGuardAttempts++
+			}
+			s.disableConsoleNoProxyAccount(ctx, input.RequestID, credential)
+			lease.Release()
+			lastErr = fmt.Errorf("Console 账号未绑定代理节点")
+			lastFailure = &UpstreamFailure{
+				HTTPStatus: http.StatusServiceUnavailable, Code: consoleGuardNoProxyErrorCode,
+				PublicMessage: "Console 账号未绑定代理节点，已停用并换号重试",
+				AccountID:     credential.ID, AccountName: credential.Name, Cause: lastErr,
+			}
+			s.logger.Warn("console_no_proxy_retry", "request_id", input.RequestID, "account_id", credential.ID, "account_name", credential.Name, "attempt", attempt+1, "console_guard_attempt", consoleGuardAttempts)
+			continue
+		}
 		if limited, ok := s.activeTeamModelRateLimit(lease.Credential, route.UpstreamModel, time.Now().UTC()); ok {
 			lease.Release()
 			lastFailure = &UpstreamFailure{

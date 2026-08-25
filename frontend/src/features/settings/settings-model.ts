@@ -184,6 +184,7 @@ export const settingsSchema = z.object({
     generationWindowThresholdMS: z.number().int().min(1),
     minOutputReasoningTokens: z.number().int().min(1),
     recordNonDegradedEvents: z.boolean(),
+    degradedEgressNodeFilePath: z.string().trim().min(1).max(4096),
   }).refine((value) => value.hardTPS > value.softTPS, { path: ["hardTPS"] }),
 });
 
@@ -239,6 +240,7 @@ export function toSettingsForm(config: SettingsConfigDTO): SettingsForm {
       generationWindowThresholdMS: config.consoleGuard.generationWindowThresholdMS,
       minOutputReasoningTokens: config.consoleGuard.minOutputReasoningTokens,
       recordNonDegradedEvents: config.consoleGuard.recordNonDegradedEvents,
+      degradedEgressNodeFilePath: config.consoleGuard.degradedEgressNodeFilePath,
     },
   };
 }
@@ -292,6 +294,7 @@ export function toSettingsDTO(config: SettingsForm): SettingsConfigDTO {
       generationWindowThresholdMS: config.consoleGuard.generationWindowThresholdMS,
       minOutputReasoningTokens: config.consoleGuard.minOutputReasoningTokens,
       recordNonDegradedEvents: config.consoleGuard.recordNonDegradedEvents,
+      degradedEgressNodeFilePath: config.consoleGuard.degradedEgressNodeFilePath,
     },
   };
 }
