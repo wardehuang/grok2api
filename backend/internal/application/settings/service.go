@@ -841,7 +841,7 @@ func toEditable(cfg config.Config) EditableConfig {
 			AutoCleanReauthMinAge:                        cfg.Accounts.AutoCleanReauthMinAge.String(),
 			AutoCleanIncludeDisabled:                     cfg.Accounts.AutoCleanIncludeDisabled,
 		},
-		ConsoleGuard:         ConsoleGuardConfig{Enabled: cfg.ConsoleGuard.Enabled, SoftTPS: cfg.ConsoleGuard.SoftTPS, HardTPS: cfg.ConsoleGuard.HardTPS, FirstTokenThresholdMS: cfg.ConsoleGuard.FirstTokenThresholdMS, GenerationWindowThresholdMS: cfg.ConsoleGuard.GenerationWindowThresholdMS, MinOutputReasoningTokens: cfg.ConsoleGuard.MinOutputReasoningTokens, DegradedEgressNodeFilePath: cfg.ConsoleGuard.DegradedEgressNodeFilePath, EnabledProvided: true, SoftTPSProvided: true, HardTPSProvided: true, FirstTokenThresholdMSProvided: true, GenerationWindowThresholdMSProvided: true, MinOutputReasoningTokensProvided: true, DegradedEgressNodeFilePathProvided: true},
+		ConsoleGuard:         ConsoleGuardConfig{Enabled: cfg.ConsoleGuard.Enabled, SoftTPS: cfg.ConsoleGuard.SoftTPS, HardTPS: cfg.ConsoleGuard.HardTPS, FirstTokenThresholdMS: cfg.ConsoleGuard.FirstTokenThresholdMS, GenerationWindowThresholdMS: cfg.ConsoleGuard.GenerationWindowThresholdMS, MinOutputReasoningTokens: cfg.ConsoleGuard.MinOutputReasoningTokens, RecordNonDegradedEvents: cfg.ConsoleGuard.RecordNonDegradedEvents, DegradedEgressNodeFilePath: cfg.ConsoleGuard.DegradedEgressNodeFilePath, EnabledProvided: true, SoftTPSProvided: true, HardTPSProvided: true, FirstTokenThresholdMSProvided: true, GenerationWindowThresholdMSProvided: true, MinOutputReasoningTokensProvided: true, RecordNonDegradedEventsProvided: true, DegradedEgressNodeFilePathProvided: true},
 		ConsoleGuardProvided: true,
 		AccountsProvided:     true,
 	}

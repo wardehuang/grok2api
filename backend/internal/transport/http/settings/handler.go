@@ -210,6 +210,9 @@ func (h *Handler) update(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, "settingsUpdateFailed", "保存运行设置失败")
 		return
 	}
+	if value := request.Config.ConsoleGuard; value != nil && value.RecordNonDegradedEvents != nil {
+		slog.Info("console_guard_settings_update_result", "serverRecordNonDegradedEvents", result.Config.ConsoleGuard.RecordNonDegradedEvents, "revision", result.Revision)
+	}
 	response.Success(c, http.StatusOK, newSettingsResponse(result))
 }
 
