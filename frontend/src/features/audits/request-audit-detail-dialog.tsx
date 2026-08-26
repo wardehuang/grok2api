@@ -117,7 +117,7 @@ function ConsoleGuardDetail({ detail }: { detail: AuditConsoleGuardDetailDTO }) 
                     <span>{attempt.accountName || (attempt.accountId ? `#${attempt.accountId}` : "-")}</span>
                     <Badge variant="outline">{attempt.verdict}</Badge>
                     <Badge variant="outline">{attempt.action}</Badge>
-                    <span className="text-muted-foreground">{attempt.outputTokensPerSecond.toFixed(2)} token/s</span>
+                    <span className="text-muted-foreground">{attempt.firstVisibleObserved ? `${attempt.outputTokensPerSecond.toFixed(2)} token/s` : t("audits.consoleGuardNotAvailable")}</span>
                   </div>
                   <EvidenceList title={t("audits.consoleGuardDecisionReasons")} items={attempt.decisionReasons} />
                 </div>
@@ -141,10 +141,10 @@ function ConsoleGuardDetail({ detail }: { detail: AuditConsoleGuardDetailDTO }) 
             <OverviewField label={t("audits.consoleGuardVisibleTokens")} value={metric(detail.visibleTokens)} />
             <OverviewField label={t("audits.consoleGuardEffectiveOutputTokens")} value={metric(detail.outputTokens)} />
             <OverviewField label={t("audits.consoleGuardEffectiveReasoningTokens")} value={metric(detail.reasoningTokens)} />
-            <OverviewField label={t("audits.consoleGuardTPS")} value={`${detail.outputTokensPerSecond.toFixed(2)} token/s`} />
+            <OverviewField label={t("audits.consoleGuardTPS")} value={detail.firstVisibleObserved ? `${detail.outputTokensPerSecond.toFixed(2)} token/s` : t("audits.consoleGuardNotAvailable")} />
             <OverviewField label={t("audits.consoleGuardObservationDuration")} value={metric(detail.observationDurationMs, " ms")} />
             <OverviewField label={t("audits.consoleGuardUpstreamDuration")} value={metric(detail.upstreamDurationMs, " ms")} />
-            <OverviewField label={t("audits.consoleGuardGenerationWindow")} value={metric(detail.generationWindowMs, " ms")} />
+            <OverviewField label={t("audits.consoleGuardGenerationWindow")} value={detail.firstVisibleObserved ? metric(detail.generationWindowMs, " ms") : t("audits.consoleGuardNotAvailable")} />
             <OverviewField label={t("audits.consoleGuardFirstVisible")} value={detail.firstVisibleObserved ? metric(detail.firstVisibleMs, " ms") : t("audits.consoleGuardNotObserved")} />
             <OverviewField label={t("audits.consoleGuardTerminal")} value={`${detail.terminal ? t("audits.yes") : t("audits.no")} · ${detail.terminalEvent || "-"}`} />
             <OverviewField label={t("audits.consoleGuardHoldExpired")} value={detail.holdExpired ? t("audits.yes") : t("audits.no")} />

@@ -6,6 +6,7 @@ package gateway
 //   - usage.reasoning_tokens > 0 不算思考（降智账号会虚报）
 //   - ": grok2api-reasoning-start" stub / 空 reasoning item 只标记 ReasoningStarted
 //   - 只有真实 reasoning delta / encrypted_content / thinking 文本算 HasThinking
+//   - 首字只认真实非空 generated delta；item ID、encrypted_content、block start 不计时
 //   - 收到 terminal（response.completed / [DONE] / message_stop）立即结算
 //
 // 本文件不依赖也不修改 quality_retry*.go 的任何符号。
@@ -33,22 +34,22 @@ const (
 )
 
 type consoleGuardScanState struct {
-	protocol               string
-	pending                []byte
-	hasThinking            bool
-	reasoningStarted       bool
-	visibleRunes           int
-	reasoningTokens        int64
-	outputTokens           int64
-	usage                  Usage
-	responseID             string
-	terminal               bool
-	terminalEvent          string
-	thinkingEvidence       []audit.ConsoleGuardEvidence
-	reasoningStartEvidence []audit.ConsoleGuardEvidence
-	startedAt              time.Time
-	firstVisibleObserved   bool
-	firstVisibleMS         int64
+	protocol                    string
+	pending                     []byte
+	hasThinking                 bool
+	reasoningStarted            bool
+	visibleRunes                int
+	reasoningTokens             int64
+	outputTokens                int64
+	usage                       Usage
+	responseID                  string
+	terminal                    bool
+	terminalEvent               string
+	thinkingEvidence            []audit.ConsoleGuardEvidence
+	reasoningStartEvidence      []audit.ConsoleGuardEvidence
+	startedAt                   time.Time
+	firstGeneratedDeltaObserved bool
+	firstGeneratedDeltaMS       int64
 }
 
 type consoleGuardReadResult struct {
@@ -244,18 +245,18 @@ func (s *consoleGuardScanState) signals() ConsoleGuardSignals {
 		TerminalEvent:          s.terminalEvent,
 		VisibleRunes:           int64(s.visibleRunes),
 		ObservationDurationMS:  observationDurationMS,
-		FirstVisibleObserved:   s.firstVisibleObserved,
-		FirstVisibleMS:         s.firstVisibleMS,
+		FirstVisibleObserved:   s.firstGeneratedDeltaObserved,
+		FirstVisibleMS:         s.firstGeneratedDeltaMS,
 	}
 }
 
-func noteConsoleGuardFirstToken(state *consoleGuardScanState) {
-	if state == nil || state.firstVisibleObserved {
+func noteConsoleGuardGeneratedDelta(state *consoleGuardScanState) {
+	if state == nil || state.firstGeneratedDeltaObserved {
 		return
 	}
-	state.firstVisibleObserved = true
+	state.firstGeneratedDeltaObserved = true
 	if !state.startedAt.IsZero() {
-		state.firstVisibleMS = max(0, time.Since(state.startedAt).Milliseconds())
+		state.firstGeneratedDeltaMS = max(0, time.Since(state.startedAt).Milliseconds())
 	}
 }
 
@@ -370,17 +371,17 @@ func observeConsoleGuardChat(state *consoleGuardScanState, payload []byte) {
 	for _, choice := range event.Choices {
 		delta := choice.Delta
 		if delta.Reasoning != "" {
-			noteConsoleGuardFirstToken(state)
+			noteConsoleGuardGeneratedDelta(state)
 			state.hasThinking = true
 			appendConsoleGuardEvidence(&state.thinkingEvidence, "chat.reasoning_delta", "delta.reasoning contains non-empty text")
 		}
 		if delta.ReasoningContent != "" {
-			noteConsoleGuardFirstToken(state)
+			noteConsoleGuardGeneratedDelta(state)
 			state.hasThinking = true
 			appendConsoleGuardEvidence(&state.thinkingEvidence, "chat.reasoning_content_delta", "delta.reasoning_content contains non-empty text")
 		}
 		if delta.ThinkingContent != "" {
-			noteConsoleGuardFirstToken(state)
+			noteConsoleGuardGeneratedDelta(state)
 			state.hasThinking = true
 			appendConsoleGuardEvidence(&state.thinkingEvidence, "chat.thinking_content_delta", "delta.thinking_content contains non-empty text")
 		}
@@ -388,11 +389,11 @@ func observeConsoleGuardChat(state *consoleGuardScanState, payload []byte) {
 			noteConsoleGuardVisibleContent(state, delta.Content)
 		}
 		if delta.Refusal != "" {
-			noteConsoleGuardFirstToken(state)
+			noteConsoleGuardGeneratedDelta(state)
 		}
 		for _, call := range delta.ToolCalls {
 			if call.Function.Arguments != "" {
-				noteConsoleGuardFirstToken(state)
+				noteConsoleGuardGeneratedDelta(state)
 			}
 		}
 		if choice.FinishReason != "" {
@@ -412,7 +413,6 @@ func noteConsoleGuardReasoningItem(state *consoleGuardScanState, item consoleGua
 		return
 	}
 	if strings.TrimSpace(item.ID) != "" {
-		noteConsoleGuardFirstToken(state)
 		state.reasoningStarted = true
 		appendConsoleGuardEvidence(&state.reasoningStartEvidence, "responses.reasoning_item", "reasoning output item has a non-empty ID")
 	}
@@ -449,7 +449,7 @@ func observeConsoleGuardResponses(state *consoleGuardScanState, payload []byte) 
 		setConsoleGuardTerminal(state, event.Type)
 	case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
 		if event.Delta != "" {
-			noteConsoleGuardFirstToken(state)
+			noteConsoleGuardGeneratedDelta(state)
 			state.hasThinking = true
 			appendConsoleGuardEvidence(&state.thinkingEvidence, "responses."+event.Type, "reasoning event delta contains non-empty text")
 		}
@@ -461,7 +461,7 @@ func observeConsoleGuardResponses(state *consoleGuardScanState, payload []byte) 
 		}
 	case "response.refusal.delta", "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
 		if event.Delta != "" {
-			noteConsoleGuardFirstToken(state)
+			noteConsoleGuardGeneratedDelta(state)
 		}
 	}
 	if event.Response != nil {
@@ -511,13 +511,12 @@ func observeConsoleGuardAnthropic(state *consoleGuardScanState, payload []byte) 
 		setConsoleGuardTerminal(state, "anthropic.message_stop")
 	case "content_block_start":
 		if event.ContentBlock.Type == "thinking" {
-			noteConsoleGuardFirstToken(state)
 			state.reasoningStarted = true
 			appendConsoleGuardEvidence(&state.reasoningStartEvidence, "anthropic.thinking_block", "content block type is thinking")
 		}
 	case "content_block_delta":
 		if event.Delta.Type == "thinking_delta" && event.Delta.Thinking != "" {
-			noteConsoleGuardFirstToken(state)
+			noteConsoleGuardGeneratedDelta(state)
 			state.hasThinking = true
 			appendConsoleGuardEvidence(&state.thinkingEvidence, "anthropic.thinking_delta", "thinking_delta contains non-empty text")
 		}
@@ -525,7 +524,7 @@ func observeConsoleGuardAnthropic(state *consoleGuardScanState, payload []byte) 
 			noteConsoleGuardVisibleContent(state, event.Delta.Text)
 		}
 		if event.Delta.Type == "input_json_delta" && event.Delta.PartialJSON != "" {
-			noteConsoleGuardFirstToken(state)
+			noteConsoleGuardGeneratedDelta(state)
 		}
 	}
 	if event.Usage != nil {
@@ -541,17 +540,17 @@ func noteConsoleGuardVisibleContent(state *consoleGuardScanState, text string) {
 	if text == "" {
 		return
 	}
-	noteConsoleGuardFirstToken(state)
+	noteConsoleGuardGeneratedDelta(state)
 	state.visibleRunes += utf8.RuneCountInString(text)
 }
 
-func peekConsoleGuardStream(ctx context.Context, body io.ReadCloser, protocol string, cfg ConsoleGuardRuntime, requestStartedAt time.Time) (io.ReadCloser, ConsoleGuardVerdict, Usage, ConsoleGuardSignals, error) {
+func peekConsoleGuardStream(ctx context.Context, body io.ReadCloser, protocol string, cfg ConsoleGuardRuntime, attemptStartedAt time.Time) (io.ReadCloser, ConsoleGuardVerdict, Usage, ConsoleGuardSignals, error) {
 	cfg = normalizeConsoleGuard(cfg)
 	if body == nil {
 		return io.NopCloser(bytes.NewReader(nil)), ConsoleGuardWait, Usage{}, ConsoleGuardSignals{}, errConsoleGuardEmptyStream
 	}
 	pump := newConsoleGuardReadPump(body)
-	state := consoleGuardScanState{protocol: protocol, startedAt: requestStartedAt}
+	state := consoleGuardScanState{protocol: protocol, startedAt: attemptStartedAt}
 	var held bytes.Buffer
 	holdTimer := time.NewTimer(cfg.HoldTimeout)
 	holdTimerC := holdTimer.C

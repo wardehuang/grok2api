@@ -1834,7 +1834,7 @@ attemptLoop:
 			}
 			if consoleGuardEnabled {
 				consoleGuardAttempts++
-				replay, verdict, peekUsage, holdSignals, peekErr := peekConsoleGuardStream(activeConsoleGuardCtx, response.Body, consoleGuardProtocol, consoleGuardCfg, startedAt)
+				replay, verdict, peekUsage, holdSignals, peekErr := peekConsoleGuardStream(activeConsoleGuardCtx, response.Body, consoleGuardProtocol, consoleGuardCfg, responseStartedAt)
 				if peekErr != nil {
 					if replay != nil {
 						_ = replay.Close()
@@ -1882,7 +1882,9 @@ attemptLoop:
 					continue
 				}
 				if verdict != ConsoleGuardWithhold && holdSignals.FirstVisibleObserved {
-					firstToken.setMilliseconds(holdSignals.FirstVisibleMS)
+					// Guard 信号使用 attempt 局部时钟；主请求审计仍保留客户端可见的请求级时钟。
+					requestFirstTokenMS := max(0, responseStartedAt.Sub(startedAt).Milliseconds()) + holdSignals.FirstVisibleMS
+					firstToken.setMilliseconds(requestFirstTokenMS)
 				}
 				response.Body = replay
 				hasNextAccount := attemptPolicy.hasNext(attempt) && selection.hasAvailableCandidate(excluded, !quotaProbeAttempted)

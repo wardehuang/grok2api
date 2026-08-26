@@ -160,8 +160,9 @@ func (s *Service) consoleGuardConfig() ConsoleGuardRuntime {
 // ClassifyConsoleGuardHold 按 Console TPS 和慢首字 burst 阈值决定扣住的流能否转发：
 // TPS 超过 hardTPS 无条件判定降智；TPS 超过 softTPS 且没有真实 thinking 也判定降智。
 // 前两项未命中后，若首字慢、首字后的生成窗口短、输出与 reasoning token 同时超过阈值，
-// 仍判定降智。首字超时直接 withhold；首字及时出现后扣住到终止事件再结算，空流交由
-// finishConsoleGuardPeek 继续按传输错误处理。
+// 仍判定降智。若终止前从未观察到真实 generated delta，则 TPS 不可用，改按
+// “terminal-only + 慢完成 + 高 token”独立判定。首字超时直接 withhold；首字及时出现后
+// 扣住到终止事件再结算，空流交由 finishConsoleGuardPeek 继续按传输错误处理。
 //
 // 扣流语义（2026-08 重定）：整条流被扣住直到流结束才做最终判定，因此 completed 事件里的
 // 上游 usage 一定可用。TPS 判定要求生成窗口达到最小阈值：首个可见内容后的毫秒级
@@ -178,6 +179,9 @@ func ClassifyConsoleGuardHold(sig ConsoleGuardSignals, cfg ConsoleGuardRuntime) 
 		return ConsoleGuardWithhold
 	}
 	if consoleGuardSlowFirstTokenBurst(sig, cfg) {
+		return ConsoleGuardWithhold
+	}
+	if consoleGuardTerminalOnlyBurst(sig, cfg) {
 		return ConsoleGuardWithhold
 	}
 	if sig.Terminal {
@@ -199,6 +203,15 @@ func consoleGuardSlowFirstTokenBurst(signals ConsoleGuardSignals, cfg ConsoleGua
 	totalTokens := consoleGuardEffectiveOutputTokens(signals) + signals.ReasoningTokens
 	return signals.FirstVisibleMS > cfg.FirstTokenThresholdMS &&
 		consoleGuardGenerationWindowMS(signals) < cfg.GenerationWindowThresholdMS &&
+		totalTokens > cfg.MinOutputReasoningTokens
+}
+
+func consoleGuardTerminalOnlyBurst(signals ConsoleGuardSignals, cfg ConsoleGuardRuntime) bool {
+	if !signals.Terminal || signals.FirstVisibleObserved {
+		return false
+	}
+	totalTokens := consoleGuardEffectiveOutputTokens(signals) + signals.ReasoningTokens
+	return signals.ObservationDurationMS > cfg.FirstTokenThresholdMS &&
 		totalTokens > cfg.MinOutputReasoningTokens
 }
 
@@ -385,10 +398,16 @@ func consoleGuardFirstTokenMS(signals ConsoleGuardSignals) int64 {
 }
 
 func consoleGuardGenerationWindowMS(signals ConsoleGuardSignals) int64 {
+	if !signals.FirstVisibleObserved {
+		return 0
+	}
 	return audit.GenerationWindowMS(consoleGuardFirstTokenMS(signals), signals.ObservationDurationMS)
 }
 
 func consoleGuardOutputTokensPerSecond(signals ConsoleGuardSignals, usage Usage) float64 {
+	if !signals.FirstVisibleObserved {
+		return 0
+	}
 	outputTokens := consoleGuardEffectiveOutputTokens(signals)
 	reasoningTokens := max(signals.ReasoningTokens, usage.ReasoningTokens)
 	return audit.OutputTokensPerSecond(outputTokens, reasoningTokens, consoleGuardFirstTokenMS(signals), signals.ObservationDurationMS)
@@ -400,13 +419,16 @@ func buildConsoleGuardAttemptDetail(protocol string, signals ConsoleGuardSignals
 	generationWindowMS := consoleGuardGenerationWindowMS(signals)
 	outputTokensPerSecond := consoleGuardOutputTokensPerSecond(signals, usage)
 	totalOutputReasoningTokens := outputTokens + reasoningTokens
-	hardTPSExceeded := outputTokensPerSecond > cfg.HardTPS
-	softTPSExceededWithoutThinking := outputTokensPerSecond > cfg.SoftTPS && !signals.HasThinking
+	tpsAvailable := signals.FirstVisibleObserved && generationWindowMS > 0
+	tpsWindowMature := tpsAvailable && generationWindowMS >= cfg.GenerationWindowThresholdMS
+	hardTPSExceeded := tpsWindowMature && outputTokensPerSecond > cfg.HardTPS
+	softTPSExceededWithoutThinking := tpsWindowMature && outputTokensPerSecond > cfg.SoftTPS && !signals.HasThinking
 	burstConditionsMet := consoleGuardSlowFirstTokenBurst(signals, cfg)
 	slowFirstTokenBurst := !hardTPSExceeded && !softTPSExceededWithoutThinking && burstConditionsMet
+	terminalOnlyBurst := consoleGuardTerminalOnlyBurst(signals, cfg)
 	decisionReasons := make([]audit.ConsoleGuardEvidence, 0, 12)
 	if signals.HasThinking {
-		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "real_thinking_present", Detail: "观察到真实 reasoning 内容；软阈值条件不会命中，但硬阈值仍独立判断"})
+		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "real_thinking_present", Detail: "观察到真实 reasoning 内容；仅在 TPS 可用且窗口成熟时豁免软阈值，不能生成 TPS，也不豁免 terminal-only burst"})
 	} else {
 		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "real_thinking_absent", Detail: "未观察到 reasoning delta、encrypted_content 或带文本的 thinking_delta；hasThinking=false"})
 	}
@@ -416,31 +438,47 @@ func buildConsoleGuardAttemptDetail(protocol string, signals ConsoleGuardSignals
 	if reasoningTokens > 0 && !signals.HasThinking {
 		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "reasoning_tokens_not_evidence", Detail: fmt.Sprintf("reasoning tokens=%d 仅作统计，未作为真实思考证据", reasoningTokens)})
 	}
-	decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "tps_formula", Detail: fmt.Sprintf("Token/s=(output_tokens + reasoning_tokens)*1000/(duration_ms - first_token_ms)=(%d + %d)*1000/(%d - %d)=%.2f", outputTokens, reasoningTokens, signals.ObservationDurationMS, consoleGuardFirstTokenMS(signals), outputTokensPerSecond)})
-	decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "tps_thresholds", Detail: fmt.Sprintf("softTPS=%.2f, hardTPS=%.2f, currentTPS=%.2f", cfg.SoftTPS, cfg.HardTPS, outputTokensPerSecond)})
-	if generationWindowMS <= 0 && totalOutputReasoningTokens > 0 {
-		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "tps_generation_window_non_positive", Detail: fmt.Sprintf("TPS 分母 duration_ms - first_token_ms = %d - %d <= 0；本次 attempt 在首个可见内容出现后尚未观察到可计量的生成窗口，因此 TPS 保持 0", signals.ObservationDurationMS, consoleGuardFirstTokenMS(signals))})
-	}
-	if hardTPSExceeded {
-		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "hard_tps_exceeded", Detail: fmt.Sprintf("current TPS %.2f > hardTPS %.2f；无论是否有 thinking 都判定降智", outputTokensPerSecond, cfg.HardTPS)})
-	} else if softTPSExceededWithoutThinking {
-		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "soft_tps_exceeded_without_thinking", Detail: fmt.Sprintf("current TPS %.2f > softTPS %.2f 且 hasThinking=false，判定降智", outputTokensPerSecond, cfg.SoftTPS)})
-	} else if outputTokensPerSecond > cfg.SoftTPS && signals.HasThinking {
-		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "thinking_protected_by_soft_threshold", Detail: fmt.Sprintf("current TPS %.2f > softTPS %.2f 但存在真实 thinking，软阈值不触发降智；继续检查 burst 条件", outputTokensPerSecond, cfg.SoftTPS)})
+	if !signals.FirstVisibleObserved {
+		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "tps_unavailable_no_generated_delta", Detail: "本次账号 attempt 未观察到真实 generated delta；response.completed 中的最终 output/usage 不能反推出首字和生成窗口，TPS=N/A"})
 	} else {
-		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "tps_within_soft_threshold", Detail: fmt.Sprintf("current TPS %.2f 未超过 softTPS %.2f；没有达到降智速度条件", outputTokensPerSecond, cfg.SoftTPS)})
+		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "tps_formula", Detail: fmt.Sprintf("Token/s=(output_tokens + reasoning_tokens)*1000/(duration_ms - first_token_ms)=(%d + %d)*1000/(%d - %d)=%.2f", outputTokens, reasoningTokens, signals.ObservationDurationMS, consoleGuardFirstTokenMS(signals), outputTokensPerSecond)})
+		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "tps_thresholds", Detail: fmt.Sprintf("softTPS=%.2f, hardTPS=%.2f, currentTPS=%.2f", cfg.SoftTPS, cfg.HardTPS, outputTokensPerSecond)})
+		if generationWindowMS <= 0 && totalOutputReasoningTokens > 0 {
+			decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "tps_generation_window_non_positive", Detail: fmt.Sprintf("TPS 分母 duration_ms - first_token_ms = %d - %d <= 0；尚无可计量生成窗口，TPS 保持 0", signals.ObservationDurationMS, consoleGuardFirstTokenMS(signals))})
+		} else if !tpsWindowMature {
+			decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "tps_window_not_mature", Detail: fmt.Sprintf("generationWindowMs=%d < %dms；展示原始 TPS，但不参与软/硬 TPS 降智判定", generationWindowMS, cfg.GenerationWindowThresholdMS)})
+		} else if hardTPSExceeded {
+			decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "hard_tps_exceeded", Detail: fmt.Sprintf("current TPS %.2f > hardTPS %.2f；无论是否有 thinking 都判定降智", outputTokensPerSecond, cfg.HardTPS)})
+		} else if softTPSExceededWithoutThinking {
+			decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "soft_tps_exceeded_without_thinking", Detail: fmt.Sprintf("current TPS %.2f > softTPS %.2f 且 hasThinking=false，判定降智", outputTokensPerSecond, cfg.SoftTPS)})
+		} else if outputTokensPerSecond > cfg.SoftTPS && signals.HasThinking {
+			decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "thinking_protected_by_soft_threshold", Detail: fmt.Sprintf("current TPS %.2f > softTPS %.2f 但存在真实 thinking，软阈值不触发降智；继续检查 burst 条件", outputTokensPerSecond, cfg.SoftTPS)})
+		} else {
+			decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "tps_within_soft_threshold", Detail: fmt.Sprintf("current TPS %.2f 未超过 softTPS %.2f；没有达到降智速度条件", outputTokensPerSecond, cfg.SoftTPS)})
+		}
 	}
-	firstTokenMS := consoleGuardFirstTokenMS(signals)
-	firstTokenSlow := signals.FirstVisibleObserved && firstTokenMS > cfg.FirstTokenThresholdMS
-	generationWindowShort := generationWindowMS < cfg.GenerationWindowThresholdMS
-	tokenCountHigh := totalOutputReasoningTokens > cfg.MinOutputReasoningTokens
-	decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "slow_first_token_burst_conditions", Detail: fmt.Sprintf("firstTokenMs=%d > %dms=%t；generationWindowMs=%d < %dms=%t；output+reasoning=%d > %d=%t", firstTokenMS, cfg.FirstTokenThresholdMS, firstTokenSlow, generationWindowMS, cfg.GenerationWindowThresholdMS, generationWindowShort, totalOutputReasoningTokens, cfg.MinOutputReasoningTokens, tokenCountHigh)})
-	if hardTPSExceeded || softTPSExceededWithoutThinking {
-		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "slow_first_token_burst_not_evaluated", Detail: "TPS 判定已先命中，慢首字 burst 规则不作为本次最终判定"})
-	} else if slowFirstTokenBurst {
-		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "slow_first_token_burst_exceeded", Detail: "软 TPS 和硬 TPS 均未命中，但慢首字 + 短生成窗口 + 高 output/reasoning token 条件同时满足，判定降智"})
-	} else {
-		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "slow_first_token_burst_not_exceeded", Detail: "慢首字 burst 三项条件未同时满足，不因该规则判定降智"})
+	if signals.FirstVisibleObserved {
+		firstTokenMS := consoleGuardFirstTokenMS(signals)
+		firstTokenSlow := firstTokenMS > cfg.FirstTokenThresholdMS
+		generationWindowShort := generationWindowMS < cfg.GenerationWindowThresholdMS
+		tokenCountHigh := totalOutputReasoningTokens > cfg.MinOutputReasoningTokens
+		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "slow_first_token_burst_conditions", Detail: fmt.Sprintf("firstTokenMs=%d > %dms=%t；generationWindowMs=%d < %dms=%t；output+reasoning=%d > %d=%t", firstTokenMS, cfg.FirstTokenThresholdMS, firstTokenSlow, generationWindowMS, cfg.GenerationWindowThresholdMS, generationWindowShort, totalOutputReasoningTokens, cfg.MinOutputReasoningTokens, tokenCountHigh)})
+		if hardTPSExceeded || softTPSExceededWithoutThinking {
+			decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "slow_first_token_burst_not_evaluated", Detail: "TPS 判定已先命中，慢首字 burst 规则不作为本次最终判定"})
+		} else if slowFirstTokenBurst {
+			decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "slow_first_token_burst_exceeded", Detail: "软 TPS 和硬 TPS 均未命中，但慢首字 + 短生成窗口 + 高 output/reasoning token 条件同时满足，判定降智"})
+		} else {
+			decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "slow_first_token_burst_not_exceeded", Detail: "慢首字 burst 三项条件未同时满足，不因该规则判定降智"})
+		}
+	} else if signals.Terminal {
+		attemptSlow := signals.ObservationDurationMS > cfg.FirstTokenThresholdMS
+		tokenCountHigh := totalOutputReasoningTokens > cfg.MinOutputReasoningTokens
+		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "terminal_only_burst_conditions", Detail: fmt.Sprintf("未观察到 generated delta；attemptDurationMs=%d > %dms=%t；output+reasoning=%d > %d=%t", signals.ObservationDurationMS, cfg.FirstTokenThresholdMS, attemptSlow, totalOutputReasoningTokens, cfg.MinOutputReasoningTokens, tokenCountHigh)})
+		if terminalOnlyBurst {
+			decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "terminal_only_burst_exceeded", Detail: "仅在 terminal 事件收到最终 output/usage，且 attempt 完成慢、token 高；按 terminal-only burst 判定降智"})
+		} else {
+			decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "terminal_only_burst_not_exceeded", Detail: "terminal-only burst 的慢完成与高 token 条件未同时满足"})
+		}
 	}
 	if outputTokens <= 0 {
 		decisionReasons = append(decisionReasons, audit.ConsoleGuardEvidence{Code: "no_effective_output_tokens", Detail: "尚未观察到有效输出 token；等待终止或扫描结果，不据此判定降智"})

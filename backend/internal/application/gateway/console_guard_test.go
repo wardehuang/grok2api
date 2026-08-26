@@ -34,18 +34,18 @@ func TestClassifyConsoleGuardHold(t *testing.T) {
 	if got := ClassifyConsoleGuardHold(ConsoleGuardSignals{HasThinking: true}, consoleGuardTestCfg); got != ConsoleGuardWait {
 		t.Fatalf("thinking without terminal must keep scanning, got %s", got)
 	}
-	hardTPSWithThinking := ConsoleGuardSignals{HasThinking: true, FirstVisibleObserved: true, FirstVisibleMS: 1, ObservationDurationMS: 2, OutputTokens: 2}
+	hardTPSWithThinking := ConsoleGuardSignals{HasThinking: true, FirstVisibleObserved: true, FirstVisibleMS: 1, ObservationDurationMS: 1252, OutputTokens: 2000}
 	if got := ClassifyConsoleGuardHold(hardTPSWithThinking, consoleGuardTestCfg); got != ConsoleGuardWithhold {
 		t.Fatalf("hard TPS must withhold even with thinking, got %s", got)
 	}
-	if ClassifyConsoleGuardHold(ConsoleGuardSignals{ReasoningTokens: 60, OutputTokens: 90, ObservationDurationMS: 50}, consoleGuardTestCfg) != ConsoleGuardWithhold {
-		t.Fatal("usage-only reasoning with no streamed thinking must withhold")
+	if ClassifyConsoleGuardHold(ConsoleGuardSignals{ReasoningTokens: 60, OutputTokens: 250, Terminal: true, ObservationDurationMS: 5001}, consoleGuardTestCfg) != ConsoleGuardWithhold {
+		t.Fatal("slow terminal-only high-token response must withhold")
 	}
 	if got := ClassifyConsoleGuardHold(ConsoleGuardSignals{Terminal: true, VisibleTokens: 4, ObservationDurationMS: 50}, consoleGuardTestCfg); got != ConsoleGuardDeliver {
 		t.Fatalf("short reply must deliver, got %s", got)
 	}
-	if got := ClassifyConsoleGuardHold(ConsoleGuardSignals{Terminal: true, VisibleTokens: 40, ObservationDurationMS: 50}, consoleGuardTestCfg); got != ConsoleGuardWithhold {
-		t.Fatalf("finished no-think sample must withhold, got %s", got)
+	if got := ClassifyConsoleGuardHold(ConsoleGuardSignals{Terminal: true, VisibleTokens: 40, ObservationDurationMS: 50}, consoleGuardTestCfg); got != ConsoleGuardDeliver {
+		t.Fatalf("short terminal-only sample below burst thresholds must deliver, got %s", got)
 	}
 	if got := ClassifyConsoleGuardHold(ConsoleGuardSignals{Terminal: true}, consoleGuardTestCfg); got != ConsoleGuardWait {
 		t.Fatalf("empty terminal must wait for empty-stream classification, got %s", got)
@@ -54,12 +54,19 @@ func TestClassifyConsoleGuardHold(t *testing.T) {
 	if got := ClassifyConsoleGuardHold(stub, consoleGuardTestCfg); got != ConsoleGuardWait {
 		t.Fatalf("stub without terminal must keep waiting for usage, got %s", got)
 	}
-	if got := ClassifyConsoleGuardHold(stub.withTerminal(), consoleGuardTestCfg); got != ConsoleGuardWithhold {
-		t.Fatalf("stub + terminal + enough output must withhold, got %s", got)
+	if got := ClassifyConsoleGuardHold(stub.withTerminal(), consoleGuardTestCfg); got != ConsoleGuardDeliver {
+		t.Fatalf("short stub + terminal below burst thresholds must deliver, got %s", got)
 	}
 	burst := ConsoleGuardSignals{Terminal: true, FirstVisibleObserved: true, FirstVisibleMS: 5001, ObservationDurationMS: 6250, OutputTokens: 301}
 	if got := ClassifyConsoleGuardHold(burst, consoleGuardTestCfg); got != ConsoleGuardWithhold {
 		t.Fatalf("slow first token burst must withhold, got %s", got)
+	}
+	terminalOnly := ConsoleGuardSignals{Terminal: true, ObservationDurationMS: 5001, OutputTokens: 301}
+	if got := ClassifyConsoleGuardHold(terminalOnly, consoleGuardTestCfg); got != ConsoleGuardWithhold {
+		t.Fatalf("terminal-only burst must withhold, got %s", got)
+	}
+	if got := consoleGuardOutputTokensPerSecond(terminalOnly, Usage{}); got != 0 {
+		t.Fatalf("terminal-only response must not expose TPS, got %.2f", got)
 	}
 }
 
@@ -125,8 +132,8 @@ func TestObserveConsoleGuardChunkUsageOnlyIsNotThinking(t *testing.T) {
 	if fakeSig.HasThinking {
 		t.Fatalf("usage.reasoning_tokens alone must not prove thinking: %#v", fakeSig)
 	}
-	if ClassifyConsoleGuardHold(fakeSig, consoleGuardTestCfg) != ConsoleGuardWithhold {
-		t.Fatalf("fake reasoning tokens with no deltas must withhold: %#v", fakeSig)
+	if ClassifyConsoleGuardHold(fakeSig, consoleGuardTestCfg) != ConsoleGuardDeliver {
+		t.Fatalf("short terminal-only response below burst thresholds must deliver: %#v", fakeSig)
 	}
 }
 
@@ -150,14 +157,20 @@ func TestObserveConsoleGuardChunkRealThinkingDelivers(t *testing.T) {
 	ObserveConsoleGuardChunk(&encrypted, []byte(sse(
 		`data: {"type":"response.output_item.added","item":{"id":"rs_1","type":"reasoning"}}`,
 		`data: {"type":"response.output_item.done","item":{"id":"rs_1","type":"reasoning","encrypted_content":"gAAAA-cipher"}}`,
-		`data: {"type":"response.output_text.delta","delta":"hello hello hello hello hello hello hello hello"}`,
 	)))
 	encSig := encrypted.signals()
-	if !encSig.FirstVisibleObserved {
-		t.Fatalf("generated reasoning item must establish the main-audit first token: %#v", encSig)
+	if encSig.FirstVisibleObserved {
+		t.Fatalf("reasoning item ID and encrypted_content must not establish generated-delta first token: %#v", encSig)
 	}
 	if !encSig.HasThinking {
 		t.Fatalf("encrypted reasoning item must count as thinking: %#v", encSig)
+	}
+	ObserveConsoleGuardChunk(&encrypted, []byte(sse(
+		`data: {"type":"response.output_text.delta","delta":"hello hello hello hello hello hello hello hello"}`,
+	)))
+	encSig = encrypted.signals()
+	if !encSig.FirstVisibleObserved {
+		t.Fatalf("non-empty output_text.delta must establish generated-delta first token: %#v", encSig)
 	}
 	if ClassifyConsoleGuardHold(encSig, consoleGuardTestCfg) != ConsoleGuardDeliver {
 		t.Fatalf("encrypted thinking should deliver")
