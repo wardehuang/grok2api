@@ -509,7 +509,7 @@ func consoleGuardRuntime(value config.ConsoleGuardConfig) gateway.ConsoleGuardRu
 	return gateway.ConsoleGuardRuntime{
 		Enabled: value.Enabled, HoldTimeout: value.HoldTimeout.Value(), SoftTPS: value.SoftTPS, HardTPS: value.HardTPS,
 		FirstTokenThresholdMS: value.FirstTokenThresholdMS, GenerationWindowThresholdMS: value.GenerationWindowThresholdMS, MinOutputReasoningTokens: value.MinOutputReasoningTokens,
-		RecordNonDegradedEvents: value.RecordNonDegradedEvents, RecordNonDegradedEventsSet: true, DegradedEgressNodeFilePath: value.DegradedEgressNodeFilePath,
+		RecordNonDegradedEvents: value.RecordNonDegradedEvents, RecordNonDegradedEventsSet: true, RequestLogEnabled: value.RequestLogEnabled, DegradedEgressNodeFilePath: value.DegradedEgressNodeFilePath,
 	}
 }
 

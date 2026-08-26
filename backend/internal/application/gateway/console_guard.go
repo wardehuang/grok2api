@@ -61,6 +61,7 @@ type ConsoleGuardRuntime struct {
 	MinOutputReasoningTokens    int64
 	RecordNonDegradedEvents     bool
 	RecordNonDegradedEventsSet  bool
+	RequestLogEnabled           bool
 	DegradedEgressNodeFilePath  string
 }
 

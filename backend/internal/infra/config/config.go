@@ -313,6 +313,7 @@ type ConsoleGuardConfig struct {
 	GenerationWindowThresholdMS int64    `yaml:"generationWindowThresholdMS"`
 	MinOutputReasoningTokens    int64    `yaml:"minOutputReasoningTokens"`
 	RecordNonDegradedEvents     bool     `yaml:"recordNonDegradedEvents"`
+	RequestLogEnabled           bool     `yaml:"requestLogEnabled"`
 	DegradedEgressNodeFilePath  string   `yaml:"degradedEgressNodeFilePath"`
 }
 
@@ -982,7 +983,7 @@ func defaultConfig() Config {
 			Enabled: false, HoldTimeout: Duration(30 * time.Second),
 			SoftTPS: auditdomain.DefaultDegradeSoftTPS, HardTPS: auditdomain.DefaultDegradeHardTPS,
 			FirstTokenThresholdMS: 5000, GenerationWindowThresholdMS: 1250, MinOutputReasoningTokens: 300,
-			RecordNonDegradedEvents: true, DegradedEgressNodeFilePath: consoleguardfile.DefaultPath,
+			RecordNonDegradedEvents: true, RequestLogEnabled: false, DegradedEgressNodeFilePath: consoleguardfile.DefaultPath,
 		},
 		ClientKeyDefaults: ClientKeyDefaultsConfig{RPMLimit: clientkeydomain.DefaultRPMLimit, MaxConcurrent: clientkeydomain.DefaultMaxConcurrent},
 		Accounts: AccountsConfig{

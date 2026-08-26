@@ -321,7 +321,8 @@ func (h *Handler) createChatCompletion(c *gin.Context) {
 	requestIDValue, _ := requestID.(string)
 	result, err := h.gateway.CreateChatCompletion(c.Request.Context(), gateway.Input{
 		RequestID: requestIDValue, ClientKey: clientKey, PublicModel: request.Model,
-		Body: body, Streaming: request.Stream, PromptCacheKey: request.PromptCacheKey,
+		Body: body, ClientRequestBody: append([]byte(nil), body...), RequestMethod: c.Request.Method, RequestPath: c.Request.URL.RequestURI(), RequestHeaders: c.Request.Header.Clone(),
+		Streaming: request.Stream, PromptCacheKey: request.PromptCacheKey,
 		PromptCacheSeed:           extractPromptCacheSeed(c.Request.Header, body),
 		AllowClientToolCacheRoute: allowBuildClientToolCacheRoute(c.Request.Header),
 		GrokTurnIndex:             c.GetHeader("x-grok-turn-idx"),
@@ -363,7 +364,8 @@ func (h *Handler) createMessage(c *gin.Context) {
 	requestIDValue, _ := requestID.(string)
 	result, err := h.gateway.CreateMessage(c.Request.Context(), gateway.Input{
 		RequestID: requestIDValue, ClientKey: clientKey, PublicModel: request.Model,
-		Body: body, Streaming: request.Stream, PromptCacheKey: request.PromptCacheKey,
+		Body: body, ClientRequestBody: append([]byte(nil), body...), RequestMethod: c.Request.Method, RequestPath: c.Request.URL.RequestURI(), RequestHeaders: c.Request.Header.Clone(),
+		Streaming: request.Stream, PromptCacheKey: request.PromptCacheKey,
 		PromptCacheSeed:           extractPromptCacheSeed(c.Request.Header, body),
 		AllowClientToolCacheRoute: allowBuildClientToolCacheRoute(c.Request.Header),
 		GrokTurnIndex:             c.GetHeader("x-grok-turn-idx"),
@@ -1134,9 +1136,11 @@ func (h *Handler) handleCreate(c *gin.Context, compact bool) {
 	}
 	requestID, _ := c.Get(middleware.RequestIDKey)
 	requestIDValue, _ := requestID.(string)
+	clientRequestBody := append([]byte(nil), body...)
 	input := gateway.Input{
 		RequestID: requestIDValue, ClientKey: clientKey, PublicModel: request.Model,
-		Body: body, Streaming: request.Stream, PromptCacheKey: request.PromptCacheKey,
+		Body: body, ClientRequestBody: clientRequestBody, RequestMethod: c.Request.Method, RequestPath: c.Request.URL.RequestURI(), RequestHeaders: c.Request.Header.Clone(),
+		Streaming: request.Stream, PromptCacheKey: request.PromptCacheKey,
 		PromptCacheSeed: extractPromptCacheSeed(c.Request.Header, body), PreviousResponseID: request.PreviousResponseID,
 		AllowClientToolCacheRoute: allowBuildClientToolCacheRoute(c.Request.Header),
 		GrokTurnIndex:             c.GetHeader("x-grok-turn-idx"),

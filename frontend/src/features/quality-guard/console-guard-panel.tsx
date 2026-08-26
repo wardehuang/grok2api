@@ -3,13 +3,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import { getConsoleGuardProxyFilePreview, getSettings, updateSettings } from "@/features/settings/settings-api";
+import { deleteConsoleGuardRequestLogs, getConsoleGuardProxyFilePreview, getSettings, updateSettings } from "@/features/settings/settings-api";
 import { ConsoleGuardEvents } from "@/features/settings/console-guard-events";
 import { durationSeconds, parseDuration } from "@/features/settings/settings-model";
 import { ErrorState } from "@/shared/components/data-state";
@@ -25,6 +26,8 @@ export function ConsoleGuardPanel() {
   const [generationWindowThresholdMS, setGenerationWindowThresholdMS] = useState<number | "">(1250);
   const [minOutputReasoningTokens, setMinOutputReasoningTokens] = useState<number | "">(300);
   const [recordNonDegradedEvents, setRecordNonDegradedEvents] = useState(true);
+  const [requestLogEnabled, setRequestLogEnabled] = useState(false);
+  const [requestLogDeleteOpen, setRequestLogDeleteOpen] = useState(false);
   const [degradedEgressNodeFilePath, setDegradedEgressNodeFilePath] = useState("");
   const [proxyPreviewOpen, setProxyPreviewOpen] = useState(false);
   const debugLog = (...args: unknown[]) => console.info("[console-guard-debug]", new Date().toISOString(), ...args);
@@ -39,6 +42,7 @@ export function ConsoleGuardPanel() {
     setGenerationWindowThresholdMS(cg.generationWindowThresholdMS);
     setMinOutputReasoningTokens(cg.minOutputReasoningTokens);
     setRecordNonDegradedEvents(cg.recordNonDegradedEvents);
+    setRequestLogEnabled(cg.requestLogEnabled);
     setDegradedEgressNodeFilePath(cg.degradedEgressNodeFilePath);
   }, [settingsQuery.data]);
   const toggleMutation = useMutation({
@@ -88,6 +92,35 @@ export function ConsoleGuardPanel() {
       setRecordNonDegradedEvents(settingsQuery.data!.config.consoleGuard.recordNonDegradedEvents);
       toast.error(error instanceof Error ? error.message : t("qualityGuard.consoleGuard.saveFailed"));
     },
+  });
+  const requestLogMutation = useMutation({
+    mutationFn: (checked: boolean) => {
+      const snapshot = settingsQuery.data!;
+      return updateSettings(snapshot.revision, {
+        ...snapshot.config,
+        consoleGuard: { ...snapshot.config.consoleGuard, requestLogEnabled: checked },
+      });
+    },
+    onSuccess: (snapshot) => {
+      queryClient.setQueryData(["settings"], snapshot);
+      setRequestLogEnabled(snapshot.config.consoleGuard.requestLogEnabled);
+      toast.success(t("qualityGuard.consoleGuard.requestLogSaved"));
+    },
+    onError: (error) => {
+      setRequestLogEnabled(settingsQuery.data!.config.consoleGuard.requestLogEnabled);
+      toast.error(error instanceof Error ? error.message : t("qualityGuard.consoleGuard.requestLogSaveFailed"));
+    },
+  });
+  const deleteRequestLogsMutation = useMutation({
+    mutationFn: deleteConsoleGuardRequestLogs,
+    onSuccess: (result) => {
+      setRequestLogDeleteOpen(false);
+      toast.success(t("qualityGuard.consoleGuard.requestLogDeleted", {
+        count: result.deletedRequests,
+        active: result.activeDeleteQueued,
+      }));
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : t("qualityGuard.consoleGuard.requestLogDeleteFailed")),
   });
   const proxyFilePathMutation = useMutation({
     mutationFn: () => {
@@ -171,6 +204,35 @@ export function ConsoleGuardPanel() {
       </section>
 
       <section className="overflow-hidden rounded-lg bg-card">
+        <div className="flex flex-col gap-4 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+          <div className="min-w-0">
+            <h2 className="text-sm font-medium">{t("qualityGuard.consoleGuard.requestLogEnabled")}</h2>
+            <p className="mt-1 max-w-3xl text-xs text-muted-foreground">{t("qualityGuard.consoleGuard.requestLogEnabledHelp")}</p>
+          </div>
+          <div className="flex shrink-0 items-center gap-3">
+            <Badge variant={requestLogEnabled ? "default" : "secondary"}>
+              {requestLogEnabled ? t("qualityGuard.consoleGuard.enabledStatus") : t("qualityGuard.consoleGuard.disabledStatus")}
+            </Badge>
+            <Switch
+              checked={requestLogEnabled}
+              disabled={requestLogMutation.isPending}
+              onCheckedChange={(checked) => {
+                setRequestLogEnabled(checked);
+                requestLogMutation.mutate(checked);
+              }}
+              aria-label={t("qualityGuard.consoleGuard.requestLogEnabled")}
+            />
+          </div>
+        </div>
+        <div className="flex flex-col gap-3 border-t px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+          <p className="max-w-3xl text-xs text-muted-foreground">{t("qualityGuard.consoleGuard.requestLogDeleteHelp")}</p>
+          <Button type="button" variant="destructive" size="sm" disabled={deleteRequestLogsMutation.isPending} onClick={() => setRequestLogDeleteOpen(true)}>
+            {t("qualityGuard.consoleGuard.requestLogDelete")}
+          </Button>
+        </div>
+      </section>
+
+      <section className="overflow-hidden rounded-lg bg-card">
         <div className="border-b px-4 py-4 sm:px-5">
           <h2 className="text-sm font-medium">{t("qualityGuard.consoleGuard.thresholdsTitle")}</h2>
           <p className="mt-1 text-xs text-muted-foreground">{t("qualityGuard.consoleGuard.thresholdsHelp")}</p>
@@ -239,6 +301,21 @@ export function ConsoleGuardPanel() {
           <ConsoleGuardEvents />
         </div>
       </section>
+
+      <AlertDialog open={requestLogDeleteOpen} onOpenChange={setRequestLogDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("qualityGuard.consoleGuard.requestLogDeleteConfirmTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("qualityGuard.consoleGuard.requestLogDeleteConfirmDescription")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction className="bg-destructive text-white hover:bg-destructive/90" disabled={deleteRequestLogsMutation.isPending} onClick={() => deleteRequestLogsMutation.mutate()}>
+              {t("qualityGuard.consoleGuard.requestLogDelete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={proxyPreviewOpen} onOpenChange={setProxyPreviewOpen}>
         <DialogContent className="flex max-h-[calc(100svh-2rem)] min-h-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">

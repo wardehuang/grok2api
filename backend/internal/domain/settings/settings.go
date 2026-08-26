@@ -164,5 +164,6 @@ type ConsoleGuardConfig struct {
 	GenerationWindowThresholdMS int64
 	MinOutputReasoningTokens    int64
 	RecordNonDegradedEvents     *bool
+	RequestLogEnabled           *bool
 	DegradedEgressNodeFilePath  string
 }

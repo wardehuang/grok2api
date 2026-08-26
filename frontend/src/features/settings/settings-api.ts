@@ -44,6 +44,7 @@ export type SettingsConfigDTO = {
     generationWindowThresholdMS: number;
     minOutputReasoningTokens: number;
     recordNonDegradedEvents: boolean;
+    requestLogEnabled: boolean;
     degradedEgressNodeFilePath: string;
   };
 };
@@ -127,6 +128,7 @@ export type SettingsSnapshotDTO = {
 
 export type ConsoleGuardProxyFilePreviewDTO = { path: string; content: string };
 export type ConsoleGuardProxyFileClearDTO = { path: string; cleared: boolean };
+export type ConsoleGuardRequestLogClearDTO = { directory: string; deletedRequests: number; deletedBytes: number; activeRequests: number; activeDeleteQueued: number };
 
 const settingsConfigValidator = hasShape({
   server: hasShape({ maxConcurrentRequests: isNumber }),
@@ -168,6 +170,7 @@ const settingsConfigValidator = hasShape({
     generationWindowThresholdMS: isOptional(isNumber),
     minOutputReasoningTokens: isOptional(isNumber),
     recordNonDegradedEvents: isOptional(isBoolean),
+    requestLogEnabled: isOptional(isBoolean),
     degradedEgressNodeFilePath: isOptional(isString),
   })),
 });
@@ -189,6 +192,7 @@ const defaultConsoleGuardConfig = (): SettingsConfigDTO["consoleGuard"] => ({
   generationWindowThresholdMS: 1250,
   minOutputReasoningTokens: 300,
   recordNonDegradedEvents: true,
+  requestLogEnabled: false,
   degradedEgressNodeFilePath: "/app/data/console-degraded-egress-nodes.txt",
 });
 function withSettingsDefaults(snapshot: SettingsSnapshotDTO): SettingsSnapshotDTO {
@@ -240,6 +244,7 @@ function withSettingsDefaults(snapshot: SettingsSnapshotDTO): SettingsSnapshotDT
         generationWindowThresholdMS: consoleGuard.generationWindowThresholdMS ?? 1250,
         minOutputReasoningTokens: consoleGuard.minOutputReasoningTokens ?? 300,
         recordNonDegradedEvents: consoleGuard.recordNonDegradedEvents ?? true,
+        requestLogEnabled: consoleGuard.requestLogEnabled ?? false,
         degradedEgressNodeFilePath: consoleGuard.degradedEgressNodeFilePath ?? "/app/data/console-degraded-egress-nodes.txt",
       },
     },
@@ -392,6 +397,12 @@ export function getConsoleGuardProxyFilePreview(): Promise<ConsoleGuardProxyFile
 
 export function clearConsoleGuardProxyFile(): Promise<ConsoleGuardProxyFileClearDTO> {
   return apiRequest("/api/admin/v1/settings/console-guard/degraded-egress-nodes/clear", { method: "POST" }, createObjectDecoder<ConsoleGuardProxyFileClearDTO>("console guard proxy file clear", { path: isString, cleared: isBoolean }));
+}
+
+export function deleteConsoleGuardRequestLogs(): Promise<ConsoleGuardRequestLogClearDTO> {
+  return apiRequest("/api/admin/v1/settings/console-guard/request-logs", { method: "DELETE" }, createObjectDecoder<ConsoleGuardRequestLogClearDTO>("console guard request log clear", {
+    directory: isString, deletedRequests: isNumber, deletedBytes: isNumber, activeRequests: isNumber, activeDeleteQueued: isNumber,
+  }));
 }
 
 type ListEgressNodesInput = {

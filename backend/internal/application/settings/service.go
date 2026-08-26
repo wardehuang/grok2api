@@ -11,6 +11,7 @@ import (
 	settingsdomain "github.com/chenyme/grok2api/backend/internal/domain/settings"
 	"github.com/chenyme/grok2api/backend/internal/infra/config"
 	"github.com/chenyme/grok2api/backend/internal/pkg/consoleguardfile"
+	"github.com/chenyme/grok2api/backend/internal/pkg/consolerequestlog"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 )
 
@@ -162,6 +163,7 @@ type ConsoleGuardConfig struct {
 	GenerationWindowThresholdMS         int64
 	MinOutputReasoningTokens            int64
 	RecordNonDegradedEvents             bool
+	RequestLogEnabled                   bool
 	DegradedEgressNodeFilePath          string
 	EnabledProvided                     bool
 	HoldTimeoutProvided                 bool
@@ -171,6 +173,7 @@ type ConsoleGuardConfig struct {
 	GenerationWindowThresholdMSProvided bool
 	MinOutputReasoningTokensProvided    bool
 	RecordNonDegradedEventsProvided     bool
+	RequestLogEnabledProvided           bool
 	DegradedEgressNodeFilePathProvided  bool
 }
 
@@ -207,6 +210,15 @@ type Snapshot struct {
 type ConsoleGuardProxyFilePreview struct {
 	Path    string
 	Content string
+}
+
+// ConsoleGuardRequestLogClear 描述 Request Log 删除结果。
+type ConsoleGuardRequestLogClear struct {
+	Directory          string
+	DeletedRequests    int
+	DeletedBytes       int64
+	ActiveRequests     int
+	ActiveDeleteQueued int
 }
 
 // Service 管理允许在线修改的配置，并向后台任务广播配置变更。
@@ -249,6 +261,17 @@ func (s *Service) ClearConsoleGuardProxyFile() (string, error) {
 		return "", err
 	}
 	return path, nil
+}
+
+func (s *Service) ClearConsoleGuardRequestLogs() (ConsoleGuardRequestLogClear, error) {
+	result, err := consolerequestlog.Clear()
+	if err != nil {
+		return ConsoleGuardRequestLogClear{}, err
+	}
+	return ConsoleGuardRequestLogClear{
+		Directory: result.Directory, DeletedRequests: result.DeletedRequests, DeletedBytes: result.DeletedBytes,
+		ActiveRequests: result.ActiveRequests, ActiveDeleteQueued: result.ActiveDeleteQueued,
+	}, nil
 }
 
 // LoadPersisted 将数据库运行设置覆盖到代码默认配置，并执行完整边界校验。
@@ -509,6 +532,9 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 	if value.ConsoleGuard.RecordNonDegradedEvents != nil {
 		base.ConsoleGuard.RecordNonDegradedEvents = *value.ConsoleGuard.RecordNonDegradedEvents
 	}
+	if value.ConsoleGuard.RequestLogEnabled != nil {
+		base.ConsoleGuard.RequestLogEnabled = *value.ConsoleGuard.RequestLogEnabled
+	}
 	if path := strings.TrimSpace(value.ConsoleGuard.DegradedEgressNodeFilePath); path != "" {
 		base.ConsoleGuard.DegradedEgressNodeFilePath = path
 	}
@@ -520,6 +546,7 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 	accountIsolatedConnections := value.Routing.AccountIsolatedConnections
 	consoleSchedulingValue := value.Routing.ConsoleScheduling
 	recordNonDegradedEvents := value.ConsoleGuard.RecordNonDegradedEvents
+	requestLogEnabled := value.ConsoleGuard.RequestLogEnabled
 	return settingsdomain.Config{
 		Server: settingsdomain.ServerConfig{MaxConcurrentRequests: value.Server.MaxConcurrentRequests},
 		ProviderBuild: settingsdomain.ProviderBuildConfig{
@@ -584,7 +611,7 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 			AutoCleanReauthMinAge:                value.Accounts.AutoCleanReauthMinAge.Value(),
 			AutoCleanIncludeDisabled:             value.Accounts.AutoCleanIncludeDisabled,
 		},
-		ConsoleGuard: settingsdomain.ConsoleGuardConfig{Enabled: value.ConsoleGuard.Enabled, HoldTimeout: value.ConsoleGuard.HoldTimeout.Value(), SoftTPS: value.ConsoleGuard.SoftTPS, HardTPS: value.ConsoleGuard.HardTPS, FirstTokenThresholdMS: value.ConsoleGuard.FirstTokenThresholdMS, GenerationWindowThresholdMS: value.ConsoleGuard.GenerationWindowThresholdMS, MinOutputReasoningTokens: value.ConsoleGuard.MinOutputReasoningTokens, RecordNonDegradedEvents: &recordNonDegradedEvents, DegradedEgressNodeFilePath: value.ConsoleGuard.DegradedEgressNodeFilePath},
+		ConsoleGuard: settingsdomain.ConsoleGuardConfig{Enabled: value.ConsoleGuard.Enabled, HoldTimeout: value.ConsoleGuard.HoldTimeout.Value(), SoftTPS: value.ConsoleGuard.SoftTPS, HardTPS: value.ConsoleGuard.HardTPS, FirstTokenThresholdMS: value.ConsoleGuard.FirstTokenThresholdMS, GenerationWindowThresholdMS: value.ConsoleGuard.GenerationWindowThresholdMS, MinOutputReasoningTokens: value.ConsoleGuard.MinOutputReasoningTokens, RecordNonDegradedEvents: &recordNonDegradedEvents, RequestLogEnabled: &requestLogEnabled, DegradedEgressNodeFilePath: value.ConsoleGuard.DegradedEgressNodeFilePath},
 	}
 }
 
@@ -703,6 +730,9 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 		}
 		if input.ConsoleGuard.RecordNonDegradedEventsProvided {
 			next.ConsoleGuard.RecordNonDegradedEvents = input.ConsoleGuard.RecordNonDegradedEvents
+		}
+		if input.ConsoleGuard.RequestLogEnabledProvided {
+			next.ConsoleGuard.RequestLogEnabled = input.ConsoleGuard.RequestLogEnabled
 		}
 		if input.ConsoleGuard.DegradedEgressNodeFilePathProvided {
 			next.ConsoleGuard.DegradedEgressNodeFilePath = strings.TrimSpace(input.ConsoleGuard.DegradedEgressNodeFilePath)
@@ -849,7 +879,7 @@ func toEditable(cfg config.Config) EditableConfig {
 			AutoCleanReauthMinAge:                        cfg.Accounts.AutoCleanReauthMinAge.String(),
 			AutoCleanIncludeDisabled:                     cfg.Accounts.AutoCleanIncludeDisabled,
 		},
-		ConsoleGuard:         ConsoleGuardConfig{Enabled: cfg.ConsoleGuard.Enabled, HoldTimeout: cfg.ConsoleGuard.HoldTimeout.String(), SoftTPS: cfg.ConsoleGuard.SoftTPS, HardTPS: cfg.ConsoleGuard.HardTPS, FirstTokenThresholdMS: cfg.ConsoleGuard.FirstTokenThresholdMS, GenerationWindowThresholdMS: cfg.ConsoleGuard.GenerationWindowThresholdMS, MinOutputReasoningTokens: cfg.ConsoleGuard.MinOutputReasoningTokens, RecordNonDegradedEvents: cfg.ConsoleGuard.RecordNonDegradedEvents, DegradedEgressNodeFilePath: cfg.ConsoleGuard.DegradedEgressNodeFilePath, EnabledProvided: true, HoldTimeoutProvided: true, SoftTPSProvided: true, HardTPSProvided: true, FirstTokenThresholdMSProvided: true, GenerationWindowThresholdMSProvided: true, MinOutputReasoningTokensProvided: true, RecordNonDegradedEventsProvided: true, DegradedEgressNodeFilePathProvided: true},
+		ConsoleGuard:         ConsoleGuardConfig{Enabled: cfg.ConsoleGuard.Enabled, HoldTimeout: cfg.ConsoleGuard.HoldTimeout.String(), SoftTPS: cfg.ConsoleGuard.SoftTPS, HardTPS: cfg.ConsoleGuard.HardTPS, FirstTokenThresholdMS: cfg.ConsoleGuard.FirstTokenThresholdMS, GenerationWindowThresholdMS: cfg.ConsoleGuard.GenerationWindowThresholdMS, MinOutputReasoningTokens: cfg.ConsoleGuard.MinOutputReasoningTokens, RecordNonDegradedEvents: cfg.ConsoleGuard.RecordNonDegradedEvents, RequestLogEnabled: cfg.ConsoleGuard.RequestLogEnabled, DegradedEgressNodeFilePath: cfg.ConsoleGuard.DegradedEgressNodeFilePath, EnabledProvided: true, HoldTimeoutProvided: true, SoftTPSProvided: true, HardTPSProvided: true, FirstTokenThresholdMSProvided: true, GenerationWindowThresholdMSProvided: true, MinOutputReasoningTokensProvided: true, RecordNonDegradedEventsProvided: true, RequestLogEnabledProvided: true, DegradedEgressNodeFilePathProvided: true},
 		ConsoleGuardProvided: true,
 		AccountsProvided:     true,
 	}

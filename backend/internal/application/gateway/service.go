@@ -31,6 +31,7 @@ import (
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
+	"github.com/chenyme/grok2api/backend/internal/pkg/consolerequestlog"
 	neterrorpkg "github.com/chenyme/grok2api/backend/internal/pkg/neterror"
 	"github.com/chenyme/grok2api/backend/internal/pkg/requestmeta"
 	"github.com/chenyme/grok2api/backend/internal/repository"
@@ -94,13 +95,17 @@ const streamIdleFailureFingerprintLimit = 2
 var freeQuotaUsagePattern = regexp.MustCompile(`(?i)tokens\s*\(actual/limit\)\s*:\s*([0-9]+)\s*/\s*([0-9]+)`)
 
 type Input struct {
-	RequestID       string
-	ClientKey       clientkey.Key
-	PublicModel     string
-	Body            []byte
-	Streaming       bool
-	PromptCacheKey  string
-	PromptCacheSeed string
+	RequestID         string
+	ClientKey         clientkey.Key
+	PublicModel       string
+	Body              []byte
+	ClientRequestBody []byte
+	RequestMethod     string
+	RequestPath       string
+	RequestHeaders    http.Header
+	Streaming         bool
+	PromptCacheKey    string
+	PromptCacheSeed   string
 	// AllowClientToolCacheRoute indicates that the client request is compatible with the Build mixed-tool cache route.
 	// It only controls whether native x_search is added to existing client tools; it is not an authentication result.
 	AllowClientToolCacheRoute bool
@@ -155,6 +160,26 @@ type Result struct {
 type StreamFailureDiagnostic struct {
 	Body          []byte
 	BodyTruncated bool
+}
+
+func requestLogDiagnostic(value *provider.DiagnosticResponse) *consolerequestlog.DiagnosticInfo {
+	if value == nil {
+		return nil
+	}
+	return &consolerequestlog.DiagnosticInfo{
+		StatusCode: value.StatusCode, Status: value.Status, Header: value.Header.Clone(),
+		Body: append([]byte(nil), value.Body...), BodyTruncated: value.BodyTruncated,
+	}
+}
+
+func requestLogRateLimit(value *provider.RateLimitMetadata) *consolerequestlog.RateLimitInfo {
+	if value == nil {
+		return nil
+	}
+	return &consolerequestlog.RateLimitInfo{
+		Scope: value.Scope, TeamID: value.TeamID, Model: value.Model,
+		Actual: value.Actual, Limit: value.Limit, RetryAfterMS: value.RetryAfter.Milliseconds(),
+	}
 }
 
 type auditRecorder interface {
@@ -829,6 +854,10 @@ func (s *Service) selectSchedulableEligibleMediaRouteWithQuotaMode(ctx context.C
 func (s *Service) createResponseAt(ctx context.Context, input Input, path string) (*Result, error) {
 	ctx, egressTrace := infraegress.WithTrace(ctx)
 	startedAt := time.Now()
+	clientRequestBody := input.ClientRequestBody
+	if clientRequestBody == nil {
+		clientRequestBody = input.Body
+	}
 	var firstToken *firstTokenTimer
 	if input.Streaming {
 		firstToken = newFirstTokenTimer(startedAt)
@@ -1072,6 +1101,28 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 			return nil, err
 		}
 	}
+	var requestLog *consolerequestlog.RequestRecorder
+	var activeRequestLogAttempt *consolerequestlog.AttemptRecorder
+	if consoleGuardEnabled && consoleGuardCfg.RequestLogEnabled {
+		requestLog, err = consolerequestlog.New(consolerequestlog.RequestInfo{
+			RequestID: input.RequestID, EventID: eventID, ClientKeyID: input.ClientKey.ID, ClientKeyName: input.ClientKey.Name,
+			ClientIP: requestmeta.ClientIP(ctx), RouteID: route.ID, Provider: string(route.Provider), Operation: string(operation),
+			Method: input.RequestMethod, Path: input.RequestPath, UpstreamPath: path, Headers: input.RequestHeaders,
+			Protocol: consoleGuardProtocol, PublicModel: publicModel, UpstreamModel: route.UpstreamModel, IdempotencyID: idempotencyID, StartedAt: startedAt,
+			ClientBody: clientRequestBody,
+			GuardConfig: map[string]any{
+				"holdTimeoutMS": consoleGuardCfg.HoldTimeout.Milliseconds(), "softTPS": consoleGuardCfg.SoftTPS, "hardTPS": consoleGuardCfg.HardTPS,
+				"firstTokenThresholdMS": consoleGuardCfg.FirstTokenThresholdMS, "generationWindowThresholdMS": consoleGuardCfg.GenerationWindowThresholdMS,
+				"minOutputReasoningTokens": consoleGuardCfg.MinOutputReasoningTokens, "maxAttempts": consoleGuardMaxAttempts,
+			},
+		}, func(logErr error) {
+			s.logger.Error("console_guard_request_log_write_failed", "request_id", input.RequestID, "error", logErr)
+		})
+		if err != nil {
+			s.logger.Error("console_guard_request_log_create_failed", "request_id", input.RequestID, "error", err)
+			requestLog = nil
+		}
+	}
 	excluded := make(map[uint64]bool)
 	failureFingerprints := make(map[string]int)
 	authRecoveryAttempted := make(map[uint64]bool)
@@ -1102,7 +1153,37 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 		}
 		activeConsoleGuardCtx = callCtx
 		activeConsoleGuardNoDataWatch = noDataWatch
+		var attemptLog *consolerequestlog.AttemptRecorder
+		if requestLog != nil {
+			attemptLog = requestLog.StartAttempt(consolerequestlog.AttemptInfo{
+				AccountID: credential.ID, AccountName: credential.Name, AccountEmail: credential.Email, AccountUserID: credential.UserID,
+				AccountTeamID: credential.TeamID, AuthType: string(credential.AuthType), EgressNodeID: credential.EgressNodeID,
+				EgressExitIP: credential.EgressExitIP, EgressIdentity: credential.EgressIdentity, QuotaProbe: lease.QuotaProbe,
+				QuotaProbeKind: string(lease.QuotaProbeKind), Billing: billing, StartedAt: started,
+			})
+			activeRequestLogAttempt = attemptLog
+		}
 		response, err := adapter.ForwardResponse(callCtx, provider.ResponseResourceRequest{Credential: credential, ForcedEgressNodeID: input.ForcedEgressNodeID, Billing: billing, Method: http.MethodPost, Path: path, Model: route.UpstreamModel, PromptCacheKey: input.PromptCacheKey, ReasoningReplayKey: reasoningReplayKey, AllowClientToolCacheRoute: input.AllowClientToolCacheRoute, GrokTurnIndex: input.GrokTurnIndex, IdempotencyID: idempotencyID, Body: input.Body, Streaming: input.Streaming, NormalizeBody: true, Operation: string(operation), NormalizedMetadata: normalizedMetadata})
+		if attemptLog != nil {
+			if response != nil {
+				attemptLog.RecordResponse(consolerequestlog.ResponseInfo{
+					StatusCode: response.StatusCode, Status: response.Status, UpstreamURL: response.UpstreamURL, Header: response.Header,
+					QuotaUnits: response.QuotaUnits, ModelCatalogChanged: response.ModelCatalogChanged,
+					RateLimit: requestLogRateLimit(response.RateLimit), Diagnostic: requestLogDiagnostic(response.Diagnostic),
+					RecoveredPrimaryFailure: requestLogDiagnostic(response.RecoveredPrimaryFailure),
+				})
+			}
+			if err != nil {
+				attemptLog.RecordError(err)
+				_ = attemptLog.Close()
+			} else {
+				if response.Body != nil {
+					response.Body = attemptLog.Wrap(response.Body)
+				} else {
+					_ = attemptLog.Close()
+				}
+			}
+		}
 		auditBase.ReasoningEffort = normalizedMetadata.ReasoningEffort
 		err = failureAttempts.captureResponse(credential, started, response, err)
 		timing.markUpstream(time.Since(started))
@@ -1142,6 +1223,11 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 		attemptDetail.AccountName = credential.Name
 		attemptDetail.DecisionReasons = append(attemptDetail.DecisionReasons, audit.ConsoleGuardEvidence{Code: "no_data_timeout", Detail: fmt.Sprintf("本次账号 attempt 从发起起连续 %d 秒未收到任何上游字节，按降智处理", int(consoleGuardNoDataTimeout/time.Second))})
 		consoleGuardAttemptDetails = append(consoleGuardAttemptDetails, *attemptDetail)
+		if activeRequestLogAttempt != nil {
+			activeRequestLogAttempt.RecordDecision(map[string]any{
+				"verdict": ConsoleGuardWithhold, "action": commit.Action, "signals": signals, "usage": usage, "detail": attemptDetail,
+			})
+		}
 		consoleGuardSawDegraded = true
 		consoleGuardRejected = commit.Action == ConsoleGuardActionReject
 		recordConsoleGuardDegraded(credential, usage, *attemptDetail)
@@ -1278,6 +1364,14 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 				outcome := "failed"
 				if successful {
 					outcome = "success"
+				}
+				if requestLog != nil {
+					requestLog.Record("request_finalized", map[string]any{
+						"outcome": outcome, "statusCode": response.StatusCode, "errorCode": errorCode, "responseID": responseID,
+						"usage": usage, "durationMS": time.Since(startedAt).Milliseconds(), "firstTokenMS": firstToken.milliseconds(),
+						"consoleGuard": consoleGuardAuditDetail(),
+					})
+					requestLog.MarkFinalAttempt()
 				}
 				timing.finish(s.logger, outcome)
 			})
@@ -1895,6 +1989,11 @@ attemptLoop:
 				attemptDetail.AccountID = accountID
 				attemptDetail.AccountName = credential.Name
 				consoleGuardAttemptDetails = append(consoleGuardAttemptDetails, *attemptDetail)
+				if activeRequestLogAttempt != nil {
+					activeRequestLogAttempt.RecordDecision(map[string]any{
+						"verdict": verdict, "action": commit.Action, "signals": holdSignals, "usage": peekUsage, "detail": attemptDetail,
+					})
+				}
 				if verdict == ConsoleGuardWithhold {
 					consoleGuardSawDegraded = true
 					consoleGuardRejected = commit.Action == ConsoleGuardActionReject
@@ -2018,6 +2117,13 @@ attemptLoop:
 		if err := s.audits.Create(persistCtx, record); err != nil {
 			s.logger.Error("request_usage_write_failed", "event_id", record.EventID, "request_id", input.RequestID, "error", err)
 		}
+		if requestLog != nil {
+			requestLog.Record("request_failed", map[string]any{
+				"statusCode": lastFailure.HTTPStatus, "errorCode": record.ErrorCode, "error": lastFailure.Error(),
+				"durationMS": record.DurationMS, "consoleGuard": consoleGuardAuditDetail(),
+			})
+			requestLog.Close("gateway_failed")
+		}
 		return nil, lastFailure
 	}
 	if lastErr == nil {
@@ -2040,6 +2146,13 @@ attemptLoop:
 	defer cancel()
 	if err := s.audits.Create(persistCtx, record); err != nil {
 		s.logger.Error("request_usage_write_failed", "event_id", record.EventID, "request_id", input.RequestID, "error", err)
+	}
+	if requestLog != nil {
+		requestLog.Record("request_failed", map[string]any{
+			"statusCode": record.StatusCode, "errorCode": record.ErrorCode, "error": lastErr.Error(),
+			"durationMS": record.DurationMS, "consoleGuard": consoleGuardAuditDetail(),
+		})
+		requestLog.Close("gateway_unavailable")
 	}
 	return nil, fmt.Errorf("%w: %w", ErrNoAvailableAccount, lastErr)
 }

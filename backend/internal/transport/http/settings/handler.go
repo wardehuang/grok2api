@@ -21,6 +21,7 @@ func (h *Handler) Register(router *gin.RouterGroup) {
 	router.PUT("/settings", h.update)
 	router.GET("/settings/console-guard/degraded-egress-nodes", h.previewConsoleGuardProxyFile)
 	router.POST("/settings/console-guard/degraded-egress-nodes/clear", h.clearConsoleGuardProxyFile)
+	router.DELETE("/settings/console-guard/request-logs", h.clearConsoleGuardRequestLogs)
 }
 
 type settingsConfigDTO struct {
@@ -151,6 +152,7 @@ type consoleGuardConfigDTO struct {
 	GenerationWindowThresholdMS *int64   `json:"generationWindowThresholdMS,omitempty"`
 	MinOutputReasoningTokens    *int64   `json:"minOutputReasoningTokens,omitempty"`
 	RecordNonDegradedEvents     *bool    `json:"recordNonDegradedEvents,omitempty"`
+	RequestLogEnabled           *bool    `json:"requestLogEnabled,omitempty"`
 	DegradedEgressNodeFilePath  *string  `json:"degradedEgressNodeFilePath,omitempty"`
 }
 
@@ -162,6 +164,14 @@ type consoleGuardProxyFilePreviewResponse struct {
 type consoleGuardProxyFileClearResponse struct {
 	Path    string `json:"path"`
 	Cleared bool   `json:"cleared"`
+}
+
+type consoleGuardRequestLogClearResponse struct {
+	Directory          string `json:"directory"`
+	DeletedRequests    int    `json:"deletedRequests"`
+	DeletedBytes       int64  `json:"deletedBytes"`
+	ActiveRequests     int    `json:"activeRequests"`
+	ActiveDeleteQueued int    `json:"activeDeleteQueued"`
 }
 
 type settingsResponse struct {
@@ -235,6 +245,19 @@ func (h *Handler) clearConsoleGuardProxyFile(c *gin.Context) {
 		return
 	}
 	response.Success(c, http.StatusOK, consoleGuardProxyFileClearResponse{Path: path, Cleared: true})
+}
+
+func (h *Handler) clearConsoleGuardRequestLogs(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	result, err := h.service.ClearConsoleGuardRequestLogs()
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "consoleGuardRequestLogDeleteFailed", "删除 Console Request Log 失败")
+		return
+	}
+	response.Success(c, http.StatusOK, consoleGuardRequestLogClearResponse{
+		Directory: result.Directory, DeletedRequests: result.DeletedRequests, DeletedBytes: result.DeletedBytes,
+		ActiveRequests: result.ActiveRequests, ActiveDeleteQueued: result.ActiveDeleteQueued,
+	})
 }
 
 func (value settingsConfigDTO) toApplication() settingsapp.EditableConfig {
@@ -336,10 +359,12 @@ func (value settingsConfigDTO) toApplication() settingsapp.EditableConfig {
 			MinOutputReasoningTokensProvided:    value.ConsoleGuard.MinOutputReasoningTokens != nil,
 			RecordNonDegradedEvents:             boolValue(value.ConsoleGuard.RecordNonDegradedEvents),
 			RecordNonDegradedEventsProvided:     value.ConsoleGuard.RecordNonDegradedEvents != nil,
+			RequestLogEnabled:                   boolValue(value.ConsoleGuard.RequestLogEnabled),
+			RequestLogEnabledProvided:           value.ConsoleGuard.RequestLogEnabled != nil,
 			DegradedEgressNodeFilePath:          optionalString(value.ConsoleGuard.DegradedEgressNodeFilePath),
 			DegradedEgressNodeFilePathProvided:  value.ConsoleGuard.DegradedEgressNodeFilePath != nil,
 		}
-		result.ConsoleGuardProvided = result.ConsoleGuard.EnabledProvided || result.ConsoleGuard.HoldTimeoutProvided || result.ConsoleGuard.SoftTPSProvided || result.ConsoleGuard.HardTPSProvided || result.ConsoleGuard.FirstTokenThresholdMSProvided || result.ConsoleGuard.GenerationWindowThresholdMSProvided || result.ConsoleGuard.MinOutputReasoningTokensProvided || result.ConsoleGuard.RecordNonDegradedEventsProvided || result.ConsoleGuard.DegradedEgressNodeFilePathProvided
+		result.ConsoleGuardProvided = result.ConsoleGuard.EnabledProvided || result.ConsoleGuard.HoldTimeoutProvided || result.ConsoleGuard.SoftTPSProvided || result.ConsoleGuard.HardTPSProvided || result.ConsoleGuard.FirstTokenThresholdMSProvided || result.ConsoleGuard.GenerationWindowThresholdMSProvided || result.ConsoleGuard.MinOutputReasoningTokensProvided || result.ConsoleGuard.RecordNonDegradedEventsProvided || result.ConsoleGuard.RequestLogEnabledProvided || result.ConsoleGuard.DegradedEgressNodeFilePathProvided
 	}
 	return result
 }
@@ -412,7 +437,7 @@ func newSettingsResponse(value settingsapp.Snapshot) settingsResponse {
 				AutoCleanReauthMinAge:                config.Accounts.AutoCleanReauthMinAge,
 				AutoCleanIncludeDisabled:             config.Accounts.AutoCleanIncludeDisabled,
 			},
-			ConsoleGuard: &consoleGuardConfigDTO{Enabled: boolPointer(config.ConsoleGuard.Enabled), HoldTimeout: stringPointer(config.ConsoleGuard.HoldTimeout), SoftTPS: floatPointer(config.ConsoleGuard.SoftTPS), HardTPS: floatPointer(config.ConsoleGuard.HardTPS), FirstTokenThresholdMS: int64Pointer(config.ConsoleGuard.FirstTokenThresholdMS), GenerationWindowThresholdMS: int64Pointer(config.ConsoleGuard.GenerationWindowThresholdMS), MinOutputReasoningTokens: int64Pointer(config.ConsoleGuard.MinOutputReasoningTokens), RecordNonDegradedEvents: boolPointer(config.ConsoleGuard.RecordNonDegradedEvents), DegradedEgressNodeFilePath: stringPointer(config.ConsoleGuard.DegradedEgressNodeFilePath)},
+			ConsoleGuard: &consoleGuardConfigDTO{Enabled: boolPointer(config.ConsoleGuard.Enabled), HoldTimeout: stringPointer(config.ConsoleGuard.HoldTimeout), SoftTPS: floatPointer(config.ConsoleGuard.SoftTPS), HardTPS: floatPointer(config.ConsoleGuard.HardTPS), FirstTokenThresholdMS: int64Pointer(config.ConsoleGuard.FirstTokenThresholdMS), GenerationWindowThresholdMS: int64Pointer(config.ConsoleGuard.GenerationWindowThresholdMS), MinOutputReasoningTokens: int64Pointer(config.ConsoleGuard.MinOutputReasoningTokens), RecordNonDegradedEvents: boolPointer(config.ConsoleGuard.RecordNonDegradedEvents), RequestLogEnabled: boolPointer(config.ConsoleGuard.RequestLogEnabled), DegradedEgressNodeFilePath: stringPointer(config.ConsoleGuard.DegradedEgressNodeFilePath)},
 		},
 		RecommendedProviderBuild: providerBuildRecommendationDTO{
 			ClientVersion: value.RecommendedProviderBuild.ClientVersion,
