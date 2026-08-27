@@ -226,7 +226,7 @@ func (handler *Handler) syncConsoleAccounts(ginContext *gin.Context) {
 		return
 	}
 
-	result, err := handler.accounts.SyncConsoleEnabledByEmails(ginContext.Request.Context(), *request.Emails)
+	result, err := handler.accounts.SyncConsoleAndWebEnabledByEmails(ginContext.Request.Context(), *request.Emails)
 	if err != nil {
 		if errors.Is(err, accountapp.ErrInvalidInput) {
 			response.Error(ginContext, http.StatusBadRequest, "invalidRequest", err.Error())
@@ -234,7 +234,7 @@ func (handler *Handler) syncConsoleAccounts(ginContext *gin.Context) {
 		}
 		requestID, _ := ginContext.Get(middleware.RequestIDKey)
 		handler.logger.Error("cpa_auto_proxy_console_account_sync_failed", "request_id", requestID, "error", err, "requested_email_count", len(*request.Emails))
-		response.Error(ginContext, http.StatusInternalServerError, "cpaAutoProxyConsoleAccountSyncFailed", "同步 Grok Console 账号状态失败")
+		response.Error(ginContext, http.StatusInternalServerError, "cpaAutoProxyConsoleAccountSyncFailed", "同步 Grok Console/Web 账号状态失败")
 		return
 	}
 
@@ -242,7 +242,18 @@ func (handler *Handler) syncConsoleAccounts(ginContext *gin.Context) {
 		"total":    result.Total,
 		"enabled":  result.Enabled,
 		"disabled": result.Disabled,
+		"console":  byProviderPayload(result, accountdomain.ProviderConsole),
+		"web":      byProviderPayload(result, accountdomain.ProviderWeb),
 	})
+}
+
+func byProviderPayload(result accountapp.AccountSyncResult, provider accountdomain.Provider) gin.H {
+	counts := result.ByProvider[provider]
+	return gin.H{
+		"total":    counts.Total,
+		"enabled":  counts.Enabled,
+		"disabled": counts.Disabled,
+	}
 }
 
 func (handler *Handler) logSlotReceived(log *slog.Logger, requestItem slotRequest) {

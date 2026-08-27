@@ -15,12 +15,21 @@ type AccountUpdates struct {
 	MinimumRemaining *float64
 }
 
-// ProviderEnabledSyncResult reports the final enabled/disabled state after
-// synchronizing one provider against an email set.
+// ProviderEnabledCounts reports the final enabled/disabled state of one
+// provider pool after synchronizing against an email set.
+type ProviderEnabledCounts struct {
+	Total    int64
+	Enabled  int64
+	Disabled int64
+}
+
+// ProviderEnabledSyncResult reports the combined state after synchronizing
+// several providers against an email set.
 type ProviderEnabledSyncResult struct {
 	Total              int64
 	Enabled            int64
 	Disabled           int64
+	ByProvider         map[account.Provider]ProviderEnabledCounts
 	DisabledAccountIDs []uint64
 }
 
@@ -141,9 +150,9 @@ type AccountRepository interface {
 	UpsertByIdentity(ctx context.Context, value account.Credential) (account.Credential, bool, error)
 	Update(ctx context.Context, value account.Credential) (account.Credential, error)
 	UpdateMany(ctx context.Context, provider account.Provider, ids []uint64, updates AccountUpdates) (int64, error)
-	// SyncProviderEnabledByEmails atomically makes provider accounts enabled
-	// exactly when their normalized email is present in emails.
-	SyncProviderEnabledByEmails(ctx context.Context, provider account.Provider, emails []string) (ProviderEnabledSyncResult, error)
+	// SyncProviderEnabledByEmails atomically makes the given providers'
+	// accounts enabled exactly when their email matches emails.
+	SyncProviderEnabledByEmails(ctx context.Context, providers []account.Provider, emails []string) (ProviderEnabledSyncResult, error)
 	Delete(ctx context.Context, id uint64) error
 	DeleteMany(ctx context.Context, ids []uint64) (int64, error)
 	// ResolveLinkedDeleteIDs expands root account IDs with one-hop (or Build/Console two-hop via Web)

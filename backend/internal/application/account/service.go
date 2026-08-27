@@ -828,27 +828,28 @@ func (s *Service) BatchUpdate(ctx context.Context, providerValue accountdomain.P
 	return updated, nil
 }
 
-// ConsoleAccountSyncResult reports the final Console account state after an
-// email-set synchronization.
-type ConsoleAccountSyncResult struct {
-	Total    int64
-	Enabled  int64
-	Disabled int64
+// AccountSyncResult reports the final account state of every synced provider
+// pool after an email-set synchronization.
+type AccountSyncResult struct {
+	Total      int64
+	Enabled    int64
+	Disabled   int64
+	ByProvider map[accountdomain.Provider]repository.ProviderEnabledCounts
 }
 
-// SyncConsoleEnabledByEmails enables Console accounts whose normalized email
-// is present in emails and disables every other Console account.
-func (s *Service) SyncConsoleEnabledByEmails(ctx context.Context, emails []string) (ConsoleAccountSyncResult, error) {
+// SyncConsoleAndWebEnabledByEmails enables Console and Web accounts whose
+// email matches emails and disables every other Console and Web account.
+func (s *Service) SyncConsoleAndWebEnabledByEmails(ctx context.Context, emails []string) (AccountSyncResult, error) {
 	normalizedEmails, err := normalizeSyncEmails(emails, maxBatchUpdateAccounts)
 	if err != nil {
-		return ConsoleAccountSyncResult{}, err
+		return AccountSyncResult{}, err
 	}
-	result, err := s.accounts.SyncProviderEnabledByEmails(ctx, accountdomain.ProviderConsole, normalizedEmails)
+	result, err := s.accounts.SyncProviderEnabledByEmails(ctx, []accountdomain.Provider{accountdomain.ProviderConsole, accountdomain.ProviderWeb}, normalizedEmails)
 	if err != nil {
-		return ConsoleAccountSyncResult{}, mapRepositoryError(err)
+		return AccountSyncResult{}, mapRepositoryError(err)
 	}
 	s.clearStickyAccounts(ctx, result.DisabledAccountIDs)
-	return ConsoleAccountSyncResult{Total: result.Total, Enabled: result.Enabled, Disabled: result.Disabled}, nil
+	return AccountSyncResult{Total: result.Total, Enabled: result.Enabled, Disabled: result.Disabled, ByProvider: result.ByProvider}, nil
 }
 
 func (s *Service) clearStickyAccounts(ctx context.Context, ids []uint64) {

@@ -1639,17 +1639,19 @@ func (r *AccountRepository) UpdateMany(ctx context.Context, providerValue accoun
 }
 
 type providerEnabledSyncRow struct {
-	ID      uint64 `gorm:"column:id"`
-	Email   string `gorm:"column:email"`
-	Enabled bool   `gorm:"column:enabled"`
+	ID       uint64           `gorm:"column:id"`
+	Provider account.Provider `gorm:"column:provider"`
+	Email    string           `gorm:"column:email"`
+	Enabled  bool             `gorm:"column:enabled"`
 }
 
 // SyncProviderEnabledByEmails changes only provider account state and returns
 // the accounts that transitioned to disabled so runtime sticky bindings can be
 // cleared by the application layer. Email matching reuses the slots endpoint's
 // multi-key index semantics: each side expands to all equivalent keys via
-// emailMatchKeys, so Gmail dot/plus variants and googlemail collapse to one key.
-func (r *AccountRepository) SyncProviderEnabledByEmails(ctx context.Context, providerValue account.Provider, emails []string) (repository.ProviderEnabledSyncResult, error) {
+// emailmatch.MatchKeys, so Gmail dot/plus variants and googlemail collapse to
+// one key. All providers are synchronized in one transaction.
+func (r *AccountRepository) SyncProviderEnabledByEmails(ctx context.Context, providers []account.Provider, emails []string) (repository.ProviderEnabledSyncResult, error) {
 	emailSet := make(map[string]struct{}, len(emails))
 	for _, email := range emails {
 		for _, matchKey := range emailmatch.MatchKeys(email) {
@@ -1658,22 +1660,33 @@ func (r *AccountRepository) SyncProviderEnabledByEmails(ctx context.Context, pro
 	}
 
 	var result repository.ProviderEnabledSyncResult
+	result.ByProvider = make(map[account.Provider]repository.ProviderEnabledCounts, len(providers))
+	for _, providerValue := range providers {
+		result.ByProvider[providerValue] = repository.ProviderEnabledCounts{}
+	}
 	var changed int
 	err := r.db.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var rows []providerEnabledSyncRow
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Model(&accountModel{}).
-			Select("id", "email", "enabled").
-			Where("provider = ?", providerValue).
+			Select("id", "provider", "email", "enabled").
+			Where("provider IN ?", providers).
 			Order("id ASC").
 			Find(&rows).Error; err != nil {
 			return err
 		}
 
-		enableIDs := make([]uint64, 0, len(rows))
-		disableIDs := make([]uint64, 0, len(rows))
-		result.Total = int64(len(rows))
+		type providerIDs struct {
+			enableIDs  []uint64
+			disableIDs []uint64
+		}
+		idsByProvider := make(map[account.Provider]*providerIDs, len(providers))
+		for _, providerValue := range providers {
+			idsByProvider[providerValue] = &providerIDs{}
+		}
 		for _, row := range rows {
+			counts := result.ByProvider[row.Provider]
+			counts.Total++
 			shouldEnable := false
 			for _, matchKey := range emailmatch.MatchKeys(row.Email) {
 				if _, exists := emailSet[matchKey]; exists {
@@ -1682,6 +1695,13 @@ func (r *AccountRepository) SyncProviderEnabledByEmails(ctx context.Context, pro
 				}
 			}
 			if shouldEnable {
+				counts.Enabled++
+			} else {
+				counts.Disabled++
+			}
+			result.ByProvider[row.Provider] = counts
+			result.Total++
+			if shouldEnable {
 				result.Enabled++
 			} else {
 				result.Disabled++
@@ -1689,32 +1709,35 @@ func (r *AccountRepository) SyncProviderEnabledByEmails(ctx context.Context, pro
 			if row.Enabled == shouldEnable {
 				continue
 			}
+			pool := idsByProvider[row.Provider]
 			if shouldEnable {
-				enableIDs = append(enableIDs, row.ID)
+				pool.enableIDs = append(pool.enableIDs, row.ID)
 			} else {
-				disableIDs = append(disableIDs, row.ID)
+				pool.disableIDs = append(pool.disableIDs, row.ID)
 			}
 		}
 
-		for start := 0; start < len(disableIDs); start += accountUpdateBatchSize {
-			end := min(start+accountUpdateBatchSize, len(disableIDs))
-			if err := tx.Model(&accountModel{}).
-				Where("provider = ? AND id IN ?", providerValue, disableIDs[start:end]).
-				Update("enabled", false).Error; err != nil {
-				return err
+		for _, providerValue := range providers {
+			pool := idsByProvider[providerValue]
+			for start := 0; start < len(pool.disableIDs); start += accountUpdateBatchSize {
+				end := min(start+accountUpdateBatchSize, len(pool.disableIDs))
+				if err := tx.Model(&accountModel{}).
+					Where("provider = ? AND id IN ?", providerValue, pool.disableIDs[start:end]).
+					Update("enabled", false).Error; err != nil {
+					return err
+				}
 			}
-		}
-		for start := 0; start < len(enableIDs); start += accountUpdateBatchSize {
-			end := min(start+accountUpdateBatchSize, len(enableIDs))
-			if err := tx.Model(&accountModel{}).
-				Where("provider = ? AND id IN ?", providerValue, enableIDs[start:end]).
-				Update("enabled", true).Error; err != nil {
-				return err
+			for start := 0; start < len(pool.enableIDs); start += accountUpdateBatchSize {
+				end := min(start+accountUpdateBatchSize, len(pool.enableIDs))
+				if err := tx.Model(&accountModel{}).
+					Where("provider = ? AND id IN ?", providerValue, pool.enableIDs[start:end]).
+					Update("enabled", true).Error; err != nil {
+					return err
+				}
 			}
+			result.DisabledAccountIDs = append(result.DisabledAccountIDs, pool.disableIDs...)
+			changed += len(pool.enableIDs) + len(pool.disableIDs)
 		}
-
-		result.DisabledAccountIDs = disableIDs
-		changed = len(enableIDs) + len(disableIDs)
 		return nil
 	})
 	if err != nil {
