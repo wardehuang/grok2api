@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	_ "github.com/chenyme/grok2api/backend/docs"
@@ -65,6 +66,7 @@ type Dependencies struct {
 	QualityGuardConfigPath string
 	QualityGuardToken      string
 	QualityGuardProbe      egressapp.QualityProbeInput
+	ExternalAPIToken       string
 	Updates                *updatecheckapp.Service
 }
 
@@ -171,6 +173,11 @@ func New(deps Dependencies) *gin.Engine {
 		qualityGuardInternal.Use(middleware.QualityGuardAuth(deps.QualityGuardToken))
 		audithttp.NewQualityGuardHandler(deps.Audits, deps.QualityGuardProbe.ClientKeyID).RegisterQualityGuard(qualityGuardInternal)
 		egressHandler.RegisterQualityGuard(qualityGuardInternal)
+	}
+	if token := strings.TrimSpace(deps.ExternalAPIToken); token != "" {
+		externalAPI := router.Group("/api/external/v1")
+		externalAPI.Use(middleware.ExternalAuth(token))
+		egressHandler.RegisterExternal(externalAPI)
 	}
 
 	v1 := router.Group("/v1")

@@ -25,6 +25,11 @@ auth:
   refreshTokenTTL: 720h
   # [按需修改] 外部地址使用 HTTPS 时必须设为 true。
   secureCookies: false
+  # [按需修改] 外部替换 Web/Console 代理节点 API 的静态 Token。留空则不挂载该接口。
+  # POST /api/external/v1/egress-nodes/replace
+  # Authorization: Bearer <token>
+  # 环境变量 GROK2API_EXTERNAL_API_TOKEN 非空时覆盖本字段。
+  externalAPIToken: ""
 
 secrets:
   # [必须修改] 至少 32 个字符。快速生成：openssl rand -hex 32

@@ -102,6 +102,30 @@ func TestQualityGuardAuthIsScopedBearerToken(t *testing.T) {
 	}
 }
 
+func TestExternalAuthIsScopedBearerToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(ExternalAuth("external-secret"))
+	router.POST("/replace", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+	for _, test := range []struct {
+		header string
+		status int
+	}{
+		{header: "Bearer external-secret", status: http.StatusNoContent},
+		{header: "Bearer scoped-secret", status: http.StatusUnauthorized},
+		{header: "", status: http.StatusUnauthorized},
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/replace", nil)
+		request.Header.Set("Authorization", test.header)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != test.status {
+			t.Fatalf("header %q status = %d, want %d", test.header, response.Code, test.status)
+		}
+	}
+}
+
 func TestBearerTokenAcceptsCaseInsensitiveSchemeAndWhitespace(t *testing.T) {
 	token, ok := bearerToken("  bearer\tsecret-token  ")
 	if !ok || token != "secret-token" {

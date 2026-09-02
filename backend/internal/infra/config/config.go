@@ -22,6 +22,7 @@ import (
 
 const (
 	DatabaseURLEnv                = "GROK2API_DATABASE_URL"
+	ExternalAPITokenEnv           = "GROK2API_EXTERNAL_API_TOKEN"
 	StatsigModeManual             = "manual"
 	StatsigModeURL                = "url"
 	ClearanceModeManual           = "manual"
@@ -138,9 +139,10 @@ type RedisRuntimeConfig struct {
 }
 
 type AuthConfig struct {
-	AccessTokenTTL  Duration `yaml:"accessTokenTTL"`
-	RefreshTokenTTL Duration `yaml:"refreshTokenTTL"`
-	SecureCookies   bool     `yaml:"secureCookies"`
+	AccessTokenTTL   Duration `yaml:"accessTokenTTL"`
+	RefreshTokenTTL  Duration `yaml:"refreshTokenTTL"`
+	SecureCookies    bool     `yaml:"secureCookies"`
+	ExternalAPIToken string   `yaml:"externalAPIToken"`
 }
 
 type ProviderConfig struct {
@@ -398,16 +400,17 @@ func Load(path string) (Config, error) {
 // overrides after YAML and before CLI overrides. Empty values are ignored so
 // Compose can pass an optional variable without changing existing deployments.
 func applyEnvironmentOverrides(cfg *Config) error {
-	value := strings.TrimSpace(os.Getenv(DatabaseURLEnv))
-	if value == "" {
-		return nil
+	if value := strings.TrimSpace(os.Getenv(DatabaseURLEnv)); value != "" {
+		dsn, err := validatePostgresEnvironmentURL(value)
+		if err != nil {
+			return err
+		}
+		cfg.Database.Driver = "postgres"
+		cfg.Database.Postgres.DSN = dsn
 	}
-	dsn, err := validatePostgresEnvironmentURL(value)
-	if err != nil {
-		return err
+	if value := strings.TrimSpace(os.Getenv(ExternalAPITokenEnv)); value != "" {
+		cfg.Auth.ExternalAPIToken = value
 	}
-	cfg.Database.Driver = "postgres"
-	cfg.Database.Postgres.DSN = dsn
 	return nil
 }
 

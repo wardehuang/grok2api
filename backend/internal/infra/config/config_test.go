@@ -220,6 +220,38 @@ qualityGuard:
 	}
 }
 
+func TestLoadExternalAPITokenFromYAMLAndEnv(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte(`secrets:
+  jwtSecret: "12345678901234567890123456789012"
+  credentialEncryptionKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+bootstrapAdmin:
+  password: "password123"
+auth:
+  externalAPIToken: "yaml-external-token"
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Auth.ExternalAPIToken != "yaml-external-token" {
+		t.Fatalf("yaml token = %q", loaded.Auth.ExternalAPIToken)
+	}
+
+	t.Setenv(ExternalAPITokenEnv, "env-external-token")
+	overridden, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overridden.Auth.ExternalAPIToken != "env-external-token" {
+		t.Fatalf("env token = %q", overridden.Auth.ExternalAPIToken)
+	}
+}
+
 func TestDefaultQualityGuardRequestRetryContract(t *testing.T) {
 	t.Parallel()
 	got := defaultConfig().QualityGuard.RequestRetry

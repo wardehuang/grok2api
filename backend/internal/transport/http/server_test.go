@@ -171,3 +171,27 @@ func TestSwaggerRegistrationFollowsStartupConfig(t *testing.T) {
 		t.Fatalf("swagger title = %q, want %q", document.Info.Title, "Grok2API")
 	}
 }
+
+func TestExternalEgressReplaceRouteRequiresConfiguredToken(t *testing.T) {
+	router := New(testDependencies())
+	request := httptest.NewRequest(http.MethodPost, "/api/external/v1/egress-nodes/replace", strings.NewReader(`["http://10.0.0.1:8080"]`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("unconfigured status = %d, want %d", recorder.Code, http.StatusNotFound)
+	}
+}
+
+func TestExternalEgressReplaceRouteRejectsMissingBearer(t *testing.T) {
+	deps := testDependencies()
+	deps.ExternalAPIToken = "external-secret"
+	router := New(deps)
+	request := httptest.NewRequest(http.MethodPost, "/api/external/v1/egress-nodes/replace", strings.NewReader(`["http://10.0.0.1:8080"]`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized || !strings.Contains(recorder.Body.String(), `"externalUnauthorized"`) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}

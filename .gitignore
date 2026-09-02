@@ -49,4 +49,9 @@ __pycache__/
 /release/
 /.tmp/
 /tmp/
+/.deploy-tmp/
+/backup.txt
+/console_sync_failed_emails.txt
+/sso.txt
+/xai-auth-emails.txt
 /Dockerfile.local
